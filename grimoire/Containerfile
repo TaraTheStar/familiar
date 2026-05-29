@@ -1,0 +1,65 @@
+# Multi-stage build for stackend.
+#
+# Stage 1 (builder): compiles whisper.cpp's static libs + libopus + the
+#                    cgo-linked Go binary.
+# Stage 2 (runtime): ships the binary, libopus runtime, the whisper model,
+#                    and nothing else.
+#
+# Reproducibility: the whisper.cpp source is vendored as a git submodule
+# under third_party/whisper.cpp, so the model + library versions are
+# pinned in-repo. Run `git submodule update --init --recursive` before
+# `podman build`.
+
+FROM golang:1.26-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libopus-dev libopusfile-dev pkg-config \
+        cmake g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Build whisper.cpp first so its libs are ready when go build runs.
+# Copying just the submodule first lets this layer cache when only Go
+# code changes.
+COPY third_party/whisper.cpp ./third_party/whisper.cpp
+RUN cd third_party/whisper.cpp \
+    && cmake -B build \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DWHISPER_BUILD_TESTS=OFF \
+        -DWHISPER_BUILD_EXAMPLES=OFF \
+        -DWHISPER_BUILD_SERVER=OFF \
+        -DGGML_OPENMP=OFF \
+    && cmake --build build --config Release -j"$(nproc)"
+
+# Then Go module deps.
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Then source + build.
+COPY . .
+ENV CGO_ENABLED=1
+RUN go build -trimpath -ldflags="-s -w" -o /out/stackend ./cmd/stackend
+
+# Runtime stage.
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libopus0 libopusfile0 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -r -u 65532 -m -d /home/stackend stackend
+
+# Bundle the whisper model so the container is single-artifact deploy.
+# Bring your own (~142MB) into the build context via `make base-model`
+# before `podman build`.
+COPY --chown=stackend:stackend \
+     third_party/whisper.cpp/models/ggml-base.en.bin \
+     /opt/stackend/whisper-base.en.bin
+
+COPY --from=builder /out/stackend /usr/local/bin/stackend
+
+USER stackend
+EXPOSE 9098
+
+ENTRYPOINT ["/usr/local/bin/stackend"]

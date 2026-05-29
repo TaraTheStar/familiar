@@ -1,0 +1,6 @@
+# OS / editor cruft (component .gitignores under poppet/ and grimoire/
+# handle build artifacts for each half)
+.DS_Store
+*.swp
+.idea/
+.vscode/

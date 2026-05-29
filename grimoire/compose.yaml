@@ -1,0 +1,77 @@
+# Local development / self-hosted deployment for stackend.
+#
+# Usage:
+#   podman-compose up -d
+#   podman-compose logs -f stackend
+#
+# Drop-in replacement target: stackend listens on port 9099 to match the
+# device's flashed CONFIG_OTA_URL (http://192.0.2.10:9099/xiaozhi/ota/),
+# so no firmware reflash is needed. The OTA endpoint hands back the WS URL
+# (-ws-url) the device then dials for the live session.
+#
+# To deploy: stop the old xiaozhi-server container bound to 9099, start this.
+
+services:
+  stackend:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: localhost/stackend:dev
+    container_name: stackend
+    restart: unless-stopped
+    ports:
+      - "9099:9099"
+    # NOTE: the values below are placeholders/examples — RFC 5737 (192.0.2.x)
+    # documentation IPs and a dummy -llm-api-key. Set them for your own LAN
+    # (and supply a real LLM key, ideally via an env var) before deploying.
+    command:
+      - "-addr=:9099"
+      - "-ws-url=ws://192.0.2.10:9099/xiaozhi/v1/"   # LAN URL the device will dial
+      - "-firmware-version=1.3.1"                       # device's current; suppresses OTA
+      - "-log-level=info"
+      # Use the container_name, not the service name: pinning container_name
+      # below makes podman-compose drop the auto "kokoro" DNS alias, so
+      # http://kokoro:8880 fails to resolve. stackend-kokoro always resolves.
+      - "-kokoro-url=http://stackend-kokoro:8880"
+      - "-kokoro-voice=af_heart"
+      - "-kokoro-speed=0.85"
+      - "-kokoro-lang=a"
+      - "-whisper-model=/opt/stackend/whisper-base.en.bin"
+      - "-llm-url=http://192.0.2.20:8080"            # llama-swap host
+      - "-llm-model=gemma4-26B-A4B"
+      - "-llm-api-key=sk-REPLACE_ME"
+      - "-llm-max-tokens=200"
+      - "-timezone=America/New_York"                    # for the get_current_time tool
+      - "-system-prompt-file=/etc/stackend/persona.txt"
+      - "-vision-url=http://192.0.2.10:9099/vision"  # advertised to device for camera tool
+    volumes:
+      - ./persona.txt:/etc/stackend/persona.txt:ro
+    depends_on:
+      - kokoro
+    networks:
+      - stackend
+
+  # Kokoro TTS sidecar. Internal-only: only stackend talks to it.
+  # If you already have a kokoro container running on this host under a
+  # different name, point -kokoro-url at it instead and delete this service.
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: stackend-kokoro
+    restart: unless-stopped
+    environment:
+      - DOWNLOAD_MODEL=true
+    volumes:
+      # Named volume, NOT a host bind mount: rootless podman maps the
+      # container's user to a host uid that can't write a bind-mounted dir,
+      # which crash-loops the model download (Errno 13). A named volume is
+      # initialized writable for the container user.
+      - kokoro-models:/app/api/src/models
+    networks:
+      - stackend
+
+volumes:
+  kokoro-models:
+
+networks:
+  stackend:
+    driver: bridge

@@ -1,0 +1,754 @@
+diff --git c/main/application.cc w/main/application.cc
+index d69d43d..c090681 100644
+--- c/main/application.cc
++++ w/main/application.cc
+@@ -55,9 +55,46 @@ Application::~Application() {
+ }
+ 
+ bool Application::SetDeviceState(DeviceState state) {
++    // Privacy gate (sleep): refuse only the transitions that ARM THE MIC
++    // (Connecting/Listening). Speaking is allowed — it doesn't use the mic —
++    // so a farewell ("Goodnight!") can still be heard before the device goes
++    // quiet; tts:stop then routes Speaking back to Idle (see OnIncomingJson)
++    // instead of Listening, so the mic never comes back on while gated.
++    if (privacy_gate_ &&
++        (state == kDeviceStateListening || state == kDeviceStateConnecting)) {
++        ESP_LOGI(TAG, "privacy gate on: ignoring transition to %s",
++                 state_machine_.GetStateName(state));
++        return false;
++    }
+     return state_machine_.TransitionTo(state);
+ }
+ 
++// SetPrivacyGate enables/disables the sleep-mode privacy gate. When enabled,
++// the microphone and wake-word detection are turned off and the device is
++// pinned to Idle (see SetDeviceState + HandleStateChangedEvent). Called by
++// the StackChan state manager on sleep entry/exit.
++void Application::SetPrivacyGate(bool on) {
++    if (privacy_gate_ == on) {
++        return;
++    }
++    privacy_gate_ = on;
++    if (on) {
++        ESP_LOGI(TAG, "privacy gate ON: mic + wake word disabled");
++        // Drop out of any conversation. If we were Listening/Speaking this
++        // transition fires HandleStateChangedEvent's gated Idle path (mic +
++        // wake off, display left alone). If we were already Idle the
++        // transition is a no-op, so disable here too.
++        SetDeviceState(kDeviceStateIdle);
++        audio_service_.EnableVoiceProcessing(false);
++        audio_service_.EnableWakeWordDetection(false);
++    } else {
++        ESP_LOGI(TAG, "privacy gate OFF: re-arming wake word");
++        // We're pinned to Idle, so SetDeviceState(Idle) would be a no-op and
++        // wouldn't re-fire the listener — re-arm wake word detection directly.
++        audio_service_.EnableWakeWordDetection(true);
++    }
++}
++
+ void Application::Initialize() {
+     auto& board = Board::GetInstance();
+     SetDeviceState(kDeviceStateStarting);
+@@ -249,11 +286,29 @@ void Application::Run() {
+             clock_ticks_++;
+             auto display = Board::GetInstance().GetDisplay();
+             display->UpdateStatusBar();
+-        
++
+             // Print debug info every 10 seconds
+             if (clock_ticks_ % 10 == 0) {
+                 SystemInfo::PrintHeapStats();
+             }
++
++            // Dotty: proactive WS reconnect on idle-channel timeout.
++            // IsTimeout() flips at 120 s of silence on the channel, but
++            // the OS-level TCP teardown can take another ~45 s on top of
++            // that, leaving the device disconnected and unresponsive to
++            // walk-up events until a manual nudge re-opens the channel.
++            // While idle, eagerly close+reopen so the next SendEvent /
++            // wake-word / listen path finds a live channel waiting.
++            if (clock_ticks_ % 30 == 0 &&
++                GetDeviceState() == kDeviceStateIdle &&
++                protocol_ != nullptr &&
++                protocol_->IsTimeout()) {
++                ESP_LOGW(TAG, "Idle channel timeout — proactive close+reopen");
++                protocol_->CloseAudioChannel();
++                if (!protocol_->OpenAudioChannel()) {
++                    ESP_LOGW(TAG, "Idle channel reopen failed; will retry next cycle");
++                }
++            }
+         }
+     }
+ }
+@@ -526,12 +581,15 @@ void Application::InitializeProtocol() {
+             if (strcmp(state->valuestring, "start") == 0) {
+                 Schedule([this]() {
+                     aborted_ = false;
+-                    SetDeviceState(kDeviceStateSpeaking);
+                 });
+             } else if (strcmp(state->valuestring, "stop") == 0) {
+                 Schedule([this]() {
+                     if (GetDeviceState() == kDeviceStateSpeaking) {
+-                        if (listening_mode_ == kListeningModeManualStop) {
++                        // Privacy gate (sleep): after a farewell finishes, go
++                        // back to Idle (mic off), NOT Listening — the gate
++                        // would refuse Listening anyway, leaving us stuck in
++                        // Speaking.
++                        if (listening_mode_ == kListeningModeManualStop || privacy_gate_) {
+                             SetDeviceState(kDeviceStateIdle);
+                         } else {
+                             SetDeviceState(kDeviceStateListening);
+@@ -542,7 +600,10 @@ void Application::InitializeProtocol() {
+                 auto text = cJSON_GetObjectItem(root, "text");
+                 if (cJSON_IsString(text)) {
+                     ESP_LOGI(TAG, "<< %s", text->valuestring);
+-                    Schedule([display, message = std::string(text->valuestring)]() {
++                    Schedule([this, display, message = std::string(text->valuestring)]() {
++                        if (GetDeviceState() != kDeviceStateSpeaking) {
++                            SetDeviceState(kDeviceStateSpeaking);
++                        }
+                         display->SetChatMessage("assistant", message.c_str());
+                     });
+                 }
+@@ -553,10 +614,12 @@ void Application::InitializeProtocol() {
+                 ESP_LOGI(TAG, ">> %s", text->valuestring);
+                 Schedule([display, message = std::string(text->valuestring)]() {
+                     display->SetChatMessage("user", message.c_str());
++                    display->SetEmotion("thinking");
+                 });
+             }
+         } else if (strcmp(type->valuestring, "llm") == 0) {
+             auto emotion = cJSON_GetObjectItem(root, "emotion");
++            ESP_LOGW(TAG, "LLM frame received, emotion=%s", cJSON_IsString(emotion) ? emotion->valuestring : "null");
+             if (cJSON_IsString(emotion)) {
+                 Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
+                     display->SetEmotion(emotion_str.c_str());
+@@ -610,33 +673,36 @@ void Application::InitializeProtocol() {
+ }
+ 
+ void Application::ShowActivationCode(const std::string& code, const std::string& message) {
+-    struct digit_sound {
+-        char digit;
+-        const std::string_view& sound;
+-    };
+-    static const std::array<digit_sound, 10> digit_sounds{{
+-        digit_sound{'0', Lang::Sounds::OGG_0},
+-        digit_sound{'1', Lang::Sounds::OGG_1}, 
+-        digit_sound{'2', Lang::Sounds::OGG_2},
+-        digit_sound{'3', Lang::Sounds::OGG_3},
+-        digit_sound{'4', Lang::Sounds::OGG_4},
+-        digit_sound{'5', Lang::Sounds::OGG_5},
+-        digit_sound{'6', Lang::Sounds::OGG_6},
+-        digit_sound{'7', Lang::Sounds::OGG_7},
+-        digit_sound{'8', Lang::Sounds::OGG_8},
+-        digit_sound{'9', Lang::Sounds::OGG_9}
+-    }};
+-
+-    // This sentence uses 9KB of SRAM, so we need to wait for it to finish
+-    Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
+-
+-    for (const auto& digit : code) {
+-        auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
+-            [digit](const digit_sound& ds) { return ds.digit == digit; });
+-        if (it != digit_sounds.end()) {
+-            audio_service_.PlaySound(it->sound);
+-        }
+-    }
++    // struct digit_sound {
++    //     char digit;
++    //     const std::string_view& sound;
++    // };
++    // static const std::array<digit_sound, 10> digit_sounds{{
++    //     digit_sound{'0', Lang::Sounds::OGG_0},
++    //     digit_sound{'1', Lang::Sounds::OGG_1}, 
++    //     digit_sound{'2', Lang::Sounds::OGG_2},
++    //     digit_sound{'3', Lang::Sounds::OGG_3},
++    //     digit_sound{'4', Lang::Sounds::OGG_4},
++    //     digit_sound{'5', Lang::Sounds::OGG_5},
++    //     digit_sound{'6', Lang::Sounds::OGG_6},
++    //     digit_sound{'7', Lang::Sounds::OGG_7},
++    //     digit_sound{'8', Lang::Sounds::OGG_8},
++    //     digit_sound{'9', Lang::Sounds::OGG_9}
++    // }};
++
++    // // This sentence uses 9KB of SRAM, so we need to wait for it to finish
++    // Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
++
++    // for (const auto& digit : code) {
++    //     auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
++    //         [digit](const digit_sound& ds) { return ds.digit == digit; });
++    //     if (it != digit_sounds.end()) {
++    //         audio_service_.PlaySound(it->sound);
++    //     }
++    // }
++
++    auto display = Board::GetInstance().GetDisplay();
++    display->SetChatMessage("system", "Please bind and set up in the mobile app.");
+ }
+ 
+ void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
+@@ -711,13 +777,23 @@ void Application::HandleToggleChatEvent() {
+ }
+ 
+ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
+-    // Check state again in case it was changed during scheduling
+     if (GetDeviceState() != kDeviceStateConnecting) {
+         return;
+     }
+ 
+     if (!protocol_->IsAudioChannelOpened()) {
+-        if (!protocol_->OpenAudioChannel()) {
++        for (int attempt = 0; attempt < 3; attempt++) {
++            if (protocol_->OpenAudioChannel()) {
++                break;
++            }
++            if (attempt < 2) {
++                vTaskDelay(pdMS_TO_TICKS(500));
++                if (GetDeviceState() != kDeviceStateConnecting) {
++                    return;
++                }
++            }
++        }
++        if (!protocol_->IsAudioChannelOpened()) {
+             return;
+         }
+     }
+@@ -786,17 +862,18 @@ void Application::HandleWakeWordDetectedEvent() {
+         audio_service_.EncodeWakeWord();
+         auto wake_word = audio_service_.GetLastWakeWord();
+ 
+-        if (!protocol_->IsAudioChannelOpened()) {
+-            SetDeviceState(kDeviceStateConnecting);
+-            // Schedule to let the state change be processed first (UI update),
+-            // then continue with OpenAudioChannel which may block for ~1 second
+-            Schedule([this, wake_word]() {
+-                ContinueWakeWordInvoke(wake_word);
+-            });
+-            return;
+-        }
+-        // Channel already opened, continue directly
+-        ContinueWakeWordInvoke(wake_word);
++        // Always go through the Schedule path so the state transition to
++        // Connecting happens whether or not the WS audio channel is
++        // already open. Stock v2.2.4 had a synchronous fast-path here
++        // (when channel was already open) that skipped the state set;
++        // ContinueWakeWordInvoke's state-check then early-returned and
++        // wake-word silently failed. Dotty's SendEvent lazy-opens the
++        // channel for telemetry from idle, so the "already open" case
++        // is the common case in this firmware.
++        SetDeviceState(kDeviceStateConnecting);
++        Schedule([this, wake_word]() {
++            ContinueWakeWordInvoke(wake_word);
++        });
+     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
+         AbortSpeaking(kAbortReasonWakeWordDetected);
+         // Clear send queue to avoid sending residues to server
+@@ -864,6 +941,15 @@ void Application::HandleStateChangedEvent() {
+     switch (new_state) {
+         case kDeviceStateUnknown:
+         case kDeviceStateIdle:
++            // Privacy gate (sleep): keep the mic + wake word OFF and leave
++            // the display untouched — state_manager has set the Sleepy
++            // avatar + "Zzz…" bubble and a forced Idle here must not clobber
++            // it. Wake is touch-or-dashboard only until the gate clears.
++            if (privacy_gate_) {
++                audio_service_.EnableVoiceProcessing(false);
++                audio_service_.EnableWakeWordDetection(false);
++                break;
++            }
+             display->SetStatus(Lang::Strings::STANDBY);
+             display->ClearChatMessages();  // Clear messages first
+             display->SetEmotion("neutral"); // Then set emotion (wechat mode checks child count)
+@@ -911,8 +997,10 @@ void Application::HandleStateChangedEvent() {
+ 
+             if (listening_mode_ != kListeningModeRealtime) {
+                 audio_service_.EnableVoiceProcessing(false);
+-                // Only AFE wake word can be detected in speaking mode
+-                audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
++                // Only AFE wake word can be detected in speaking mode — but
++                // keep it OFF while the privacy gate is on (a gated farewell
++                // is allowed to play, but the mic/wake stay disabled).
++                audio_service_.EnableWakeWordDetection(!privacy_gate_ && audio_service_.IsAfeWakeWord());
+             }
+             audio_service_.ResetDecoder();
+             break;
+@@ -1075,6 +1163,28 @@ void Application::SendMcpMessage(const std::string& payload) {
+     });
+ }
+ 
++// Dotty: ambient perception event emit. Thread-safe — Schedule pushes
++// the actual SendEvent onto the main task so callers (face_tracking
++// modifier on Core 0, sound localizer task) don't need to know about
++// the protocol's threading model.
++//
++// Lazy-opens the WS audio channel so events from idle state (no
++// active conversation) still reach the server. xiaozhi WS lifecycle
++// is otherwise session-scoped — without this, perception events
++// queued at idle would silently fail (websocket_ == nullptr).
++void Application::SendEvent(const std::string& name, const std::string& data_json) {
++    Schedule([this, name, data_json]() {
++        if (!protocol_) return;
++        if (!protocol_->IsAudioChannelOpened()) {
++            if (!protocol_->OpenAudioChannel()) {
++                ESP_LOGW(TAG, "SendEvent: failed to open WS for %s", name.c_str());
++                return;
++            }
++        }
++        protocol_->SendEvent(name, data_json);
++    });
++}
++
+ void Application::SetAecMode(AecMode mode) {
+     aec_mode_ = mode;
+     Schedule([this]() {
+diff --git c/main/application.h w/main/application.h
+index 7ca7af4..90721d9 100644
+--- c/main/application.h
++++ w/main/application.h
+@@ -72,6 +72,11 @@ public:
+      */
+     bool SetDeviceState(DeviceState state);
+ 
++    // Sleep-mode privacy gate. When enabled, the mic + wake-word detection
++    // are turned off and the device is pinned to Idle until disabled. Driven
++    // by the StackChan state manager's sleep entry/exit hooks.
++    void SetPrivacyGate(bool on);
++
+     /**
+      * Schedule a callback to be executed in the main task
+      */
+@@ -108,6 +113,9 @@ public:
+     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
+     bool CanEnterSleepMode();
+     void SendMcpMessage(const std::string& payload);
++    // Dotty: ambient perception event emit (face_detected / face_lost / sound_event).
++    // Thread-safe (Schedule wrapped); fire-and-forget.
++    void SendEvent(const std::string& name, const std::string& data_json);
+     void SetAecMode(AecMode mode);
+     AecMode GetAecMode() const { return aec_mode_; }
+     void PlaySound(const std::string_view& sound);
+@@ -140,6 +148,7 @@ private:
+     bool aborted_ = false;
+     bool assets_version_checked_ = false;
+     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
++    bool privacy_gate_ = false;  // Sleep-mode: mic + wake word off, pinned to Idle
+     int clock_ticks_ = 0;
+     TaskHandle_t activation_task_handle_ = nullptr;
+ 
+diff --git c/main/assets.cc w/main/assets.cc
+index ad61944..6b84daf 100644
+--- c/main/assets.cc
++++ w/main/assets.cc
+@@ -3,8 +3,8 @@
+ #include "display.h"
+ #include "application.h"
+ #include "lvgl_theme.h"
+-#include "emote_display.h"
+-#include "expression_emote.h"
++// #include "emote_display.h"
++// #include "expression_emote.h"
+ #if HAVE_LVGL
+ #include "display/lcd_display.h"
+ #include <spi_flash_mmap.h>
+@@ -356,72 +356,72 @@ bool Assets::LvglStrategy::Apply(Assets* assets) {
+ }
+ #endif // HAVE_LVGL
+ 
+-bool Assets::EmoteStrategy::InitializePartition(Assets* assets) {
+-    assets->partition_valid_ = false;
+-
+-    if (!Assets::FindPartition(assets)) {
+-        return false;
+-    }
+-
+-    esp_err_t ret = ESP_ERR_INVALID_STATE;
+-    auto display = Board::GetInstance().GetDisplay();
+-    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+-    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
+-        const emote_data_t data = {
+-            .type = EMOTE_SOURCE_PARTITION,
+-            .source = {
+-                .partition_label = PARTITION_LABEL,
+-            },
+-            .flags = {
+-                .mmap_enable = true, //must be true here!!!
+-            },
+-        };
+-        ret = emote_mount_assets(emote_display->GetEmoteHandle(), &data);
+-    } else {
+-        ESP_LOGE(TAG, "Emote display is not initialized");
+-    }
+-    assets->partition_valid_ = ((ret == ESP_OK) ? true : false);
+-    return assets->partition_valid_;
+-}
+-
+-void Assets::EmoteStrategy::UnApplyPartition(Assets* assets) {
+-    auto display = Board::GetInstance().GetDisplay();
+-    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+-    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
+-        emote_unmount_assets(emote_display->GetEmoteHandle());
+-    }
+-    (void)assets; // Unused parameter
+-}
+-
+-bool Assets::EmoteStrategy::GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) {
+-    auto display = Board::GetInstance().GetDisplay();
+-    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+-    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
+-        const uint8_t* data = nullptr;
+-        size_t data_size = 0;
+-        if (ESP_OK == emote_get_asset_data_by_name(emote_display->GetEmoteHandle(), name.c_str(), &data, &data_size)) {
+-            ptr = const_cast<void*>(static_cast<const void*>(data));
+-            size = data_size;
+-            return true;
+-        }
+-        ESP_LOGE(TAG, "Failed to get asset data by name: %s", name.c_str());
+-        return false;
+-    }
+-    (void)assets; // Unused parameter
+-    return false;
+-}
+-
+-bool Assets::EmoteStrategy::Apply(Assets* assets) {
+-    Assets::LoadSrmodelsFromIndex(assets);
+-
+-    auto display = Board::GetInstance().GetDisplay();
+-    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+-
+-    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
+-        emote_load_assets(emote_display->GetEmoteHandle());
+-    }
+-    return true;
+-}
++// bool Assets::EmoteStrategy::InitializePartition(Assets* assets) {
++//     assets->partition_valid_ = false;
++
++//     if (!Assets::FindPartition(assets)) {
++//         return false;
++//     }
++
++//     esp_err_t ret = ESP_ERR_INVALID_STATE;
++//     auto display = Board::GetInstance().GetDisplay();
++//     auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
++//     if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
++//         const emote_data_t data = {
++//             .type = EMOTE_SOURCE_PARTITION,
++//             .source = {
++//                 .partition_label = PARTITION_LABEL,
++//             },
++//             .flags = {
++//                 .mmap_enable = true, //must be true here!!!
++//             },
++//         };
++//         ret = emote_mount_assets(emote_display->GetEmoteHandle(), &data);
++//     } else {
++//         ESP_LOGE(TAG, "Emote display is not initialized");
++//     }
++//     assets->partition_valid_ = ((ret == ESP_OK) ? true : false);
++//     return assets->partition_valid_;
++// }
++
++// void Assets::EmoteStrategy::UnApplyPartition(Assets* assets) {
++//     auto display = Board::GetInstance().GetDisplay();
++//     auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
++//     if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
++//         emote_unmount_assets(emote_display->GetEmoteHandle());
++//     }
++//     (void)assets; // Unused parameter
++// }
++
++// bool Assets::EmoteStrategy::GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) {
++//     auto display = Board::GetInstance().GetDisplay();
++//     auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
++//     if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
++//         const uint8_t* data = nullptr;
++//         size_t data_size = 0;
++//         if (ESP_OK == emote_get_asset_data_by_name(emote_display->GetEmoteHandle(), name.c_str(), &data, &data_size)) {
++//             ptr = const_cast<void*>(static_cast<const void*>(data));
++//             size = data_size;
++//             return true;
++//         }
++//         ESP_LOGE(TAG, "Failed to get asset data by name: %s", name.c_str());
++//         return false;
++//     }
++//     (void)assets; // Unused parameter
++//     return false;
++// }
++
++// bool Assets::EmoteStrategy::Apply(Assets* assets) {
++//     Assets::LoadSrmodelsFromIndex(assets);
++
++//     auto display = Board::GetInstance().GetDisplay();
++//     auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
++
++//     if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
++//         emote_load_assets(emote_display->GetEmoteHandle());
++//     }
++//     return true;
++// }
+ 
+ bool Assets::Download(std::string url, std::function<void(int progress, size_t speed)> progress_callback) {
+     ESP_LOGI(TAG, "Downloading new version of assets from %s", url.c_str());
+diff --git c/main/assets.h w/main/assets.h
+index 3692e0c..7bfbc5c 100644
+--- c/main/assets.h
++++ w/main/assets.h
+@@ -68,13 +68,13 @@ private:
+         bool checksum_valid_ = false;
+     };
+     
+-    class EmoteStrategy : public AssetStrategy {
+-    public:
+-        bool Apply(Assets* assets) override;
+-        bool InitializePartition(Assets* assets) override;
+-        void UnApplyPartition(Assets* assets) override;
+-        bool GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) override;
+-    };
++    // class EmoteStrategy : public AssetStrategy {
++    // public:
++    //     bool Apply(Assets* assets) override;
++    //     bool InitializePartition(Assets* assets) override;
++    //     void UnApplyPartition(Assets* assets) override;
++    //     bool GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) override;
++    // };
+     
+     // Strategy instance
+     std::unique_ptr<AssetStrategy> strategy_;
+diff --git c/main/audio/audio_service.cc w/main/audio/audio_service.cc
+index 350ac58..ab2912d 100644
+--- c/main/audio/audio_service.cc
++++ w/main/audio/audio_service.cc
+@@ -158,12 +158,13 @@ void AudioService::Start() {
+     }, "audio_output", 2048, this, 4, &audio_output_task_handle_);
+ #endif
+ 
+-    /* Start the opus codec task */
+-    xTaskCreate([](void* arg) {
++    /* Start the opus codec task — priority above audio_output (4), pinned to Core 1
++       to avoid WiFi contention on Core 0 */
++    xTaskCreatePinnedToCore([](void* arg) {
+         AudioService* audio_service = (AudioService*)arg;
+         audio_service->OpusCodecTask();
+         vTaskDelete(NULL);
+-    }, "opus_codec", 2048 * 12, this, 2, &opus_codec_task_handle_);
++    }, "opus_codec", 2048 * 12, this, 6, &opus_codec_task_handle_, 1);
+ }
+ 
+ void AudioService::Stop() {
+@@ -270,6 +271,12 @@ void AudioService::AudioInputTask() {
+             int samples = 160; // 10ms
+             std::vector<int16_t> data;
+             if (ReadAudioData(data, 16000, samples)) {
++                // Dotty: ambient sound localizer hook. Fires before mono
++                // downmix so subscribers see raw interleaved L/R frames.
++                // Cheap (zero-cost when no callback registered).
++                if (stereo_frame_callback_ && codec_->input_channels() == 2) {
++                    stereo_frame_callback_(data);
++                }
+                 if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
+                     wake_word_->Feed(data);
+                 }
+diff --git c/main/audio/audio_service.h w/main/audio/audio_service.h
+index 99db546..4e0b5dc 100644
+--- c/main/audio/audio_service.h
++++ w/main/audio/audio_service.h
+@@ -38,7 +38,7 @@
+ 
+ #define OPUS_FRAME_DURATION_MS 60
+ #define MAX_ENCODE_TASKS_IN_QUEUE 2
+-#define MAX_PLAYBACK_TASKS_IN_QUEUE 2
++#define MAX_PLAYBACK_TASKS_IN_QUEUE 4
+ #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+ #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+ #define AUDIO_TESTING_MAX_DURATION_MS 10000
+@@ -127,6 +127,14 @@ public:
+ 
+     void SetCallbacks(AudioServiceCallbacks& callbacks);
+ 
++    // Dotty: ambient sound localizer hook. Subscribes to interleaved
++    // stereo PCM frames as they're read from the codec (always while wake-word is
++    // running, which is true at idle). Subscriber is responsible for
++    // its own thread-safety; the callback runs on the audio input task.
++    void OnStereoFrame(std::function<void(const std::vector<int16_t>&)> cb) {
++        stereo_frame_callback_ = std::move(cb);
++    }
++
+     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
+     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
+     void PlaySound(const std::string_view& sound);
+@@ -137,6 +145,8 @@ public:
+ private:
+     AudioCodec* codec_ = nullptr;
+     AudioServiceCallbacks callbacks_;
++    // Dotty: stereo frame callback for ambient sound localization.
++    std::function<void(const std::vector<int16_t>&)> stereo_frame_callback_;
+     std::unique_ptr<AudioProcessor> audio_processor_;
+     std::unique_ptr<WakeWord> wake_word_;
+     std::unique_ptr<AudioDebugger> audio_debugger_;
+diff --git c/main/audio/wake_words/afe_wake_word.cc w/main/audio/wake_words/afe_wake_word.cc
+index 8fc5fef..f0f3a42 100644
+--- c/main/audio/wake_words/afe_wake_word.cc
++++ w/main/audio/wake_words/afe_wake_word.cc
+@@ -162,6 +162,10 @@ void AfeWakeWord::AudioDetectionTask() {
+ 
+ void AfeWakeWord::StoreWakeWordData(const int16_t* data, size_t samples) {
+     // store audio data to wake_word_pcm_
++    // Mutex-protected: the encoder task in EncodeWakeWordData() also iterates
++    // wake_word_pcm_; concurrent emplace/pop here vs. range-for there
++    // corrupts the deque and triggers tlsf_free double-free on dtor.
++    std::lock_guard<std::mutex> lock(wake_word_mutex_);
+     wake_word_pcm_.emplace_back(std::vector<int16_t>(data, data + samples));
+     // keep about 2 seconds of data, detect duration is 30ms (sample_rate == 16000, chunksize == 512)
+     while (wake_word_pcm_.size() > 2000 / 30) {
+@@ -171,7 +175,13 @@ void AfeWakeWord::StoreWakeWordData(const int16_t* data, size_t samples) {
+ 
+ void AfeWakeWord::EncodeWakeWordData() {
+     const size_t stack_size = 4096 * 6;
+-    wake_word_opus_.clear();
++    {
++        // wake_word_opus_ is consumed by GetWakeWordOpus under the same
++        // mutex; clear here must be locked too or the consumer can race
++        // with the deque resetting and dereference invalid memory.
++        std::lock_guard<std::mutex> lock(wake_word_mutex_);
++        wake_word_opus_.clear();
++    }
+     if (wake_word_encode_task_stack_ == nullptr) {
+         wake_word_encode_task_stack_ = (StackType_t*)heap_caps_malloc(stack_size, MALLOC_CAP_SPIRAM);
+         assert(wake_word_encode_task_stack_ != nullptr);
+@@ -208,8 +218,19 @@ void AfeWakeWord::EncodeWakeWordData() {
+             std::vector<int16_t> in_buffer;
+             esp_audio_enc_in_frame_t in = {};
+             esp_audio_enc_out_frame_t out = {};
+-            
+-            for (auto& pcm: this_->wake_word_pcm_) {
++
++            // Drain wake_word_pcm_ under the mutex into a local copy so we
++            // can iterate without racing StoreWakeWordData() (called from
++            // the audio detection callback). Iterating the live deque while
++            // the producer mutates it corrupts the structure and causes a
++            // tlsf_free double-free when vectors are later destroyed.
++            std::deque<std::vector<int16_t>> local_pcm;
++            {
++                std::lock_guard<std::mutex> lock(this_->wake_word_mutex_);
++                local_pcm.swap(this_->wake_word_pcm_);
++            }
++
++            for (auto& pcm: local_pcm) {
+                 if (in_buffer.empty()) {
+                     in_buffer = std::move(pcm);
+                 } else {
+@@ -238,7 +259,9 @@ void AfeWakeWord::EncodeWakeWordData() {
+                     in_buffer.erase(in_buffer.begin(), in_buffer.begin() + frame_size);
+                 }
+             }
+-            this_->wake_word_pcm_.clear();
++            // local_pcm goes out of scope at lambda end and frees its own
++            // vectors safely; no clear of the live deque needed (we already
++            // moved its contents out under the mutex above).
+             // Close encoder
+             esp_opus_enc_close(encoder_handle);
+             auto end_time = esp_timer_get_time();
+diff --git c/main/boards/common/i2c_device.cc w/main/boards/common/i2c_device.cc
+index 835997d..1061416 100644
+--- c/main/boards/common/i2c_device.cc
++++ w/main/boards/common/i2c_device.cc
+@@ -21,15 +21,29 @@ I2cDevice::I2cDevice(i2c_master_bus_handle_t i2c_bus, uint8_t addr) {
+ 
+ void I2cDevice::WriteReg(uint8_t reg, uint8_t value) {
+     uint8_t buffer[2] = {reg, value};
+-    ESP_ERROR_CHECK(i2c_master_transmit(i2c_device_, buffer, 2, 100));
++    esp_err_t err = i2c_master_transmit(i2c_device_, buffer, 2, 100);
++    if (err != ESP_OK) {
++        ESP_LOGW(TAG, "WriteReg failed reg=0x%02X val=0x%02X err=%s",
++                 reg, value, esp_err_to_name(err));
++    }
+ }
+ 
+ uint8_t I2cDevice::ReadReg(uint8_t reg) {
+     uint8_t buffer[1];
+-    ESP_ERROR_CHECK(i2c_master_transmit_receive(i2c_device_, &reg, 1, buffer, 1, 100));
++    esp_err_t err = i2c_master_transmit_receive(i2c_device_, &reg, 1, buffer, 1, 100);
++    if (err != ESP_OK) {
++        ESP_LOGW(TAG, "ReadReg failed reg=0x%02X err=%s",
++                 reg, esp_err_to_name(err));
++        return 0xFF;
++    }
+     return buffer[0];
+ }
+ 
+ void I2cDevice::ReadRegs(uint8_t reg, uint8_t* buffer, size_t length) {
+-    ESP_ERROR_CHECK(i2c_master_transmit_receive(i2c_device_, &reg, 1, buffer, length, 100));
++    esp_err_t err = i2c_master_transmit_receive(i2c_device_, &reg, 1, buffer, length, 100);
++    if (err != ESP_OK) {
++        ESP_LOGW(TAG, "ReadRegs failed reg=0x%02X len=%u err=%s",
++                 reg, (unsigned)length, esp_err_to_name(err));
++        // Buffer left untouched; caller must not assume valid contents.
++    }
+ }
+\ No newline at end of file
+diff --git c/main/protocols/protocol.cc w/main/protocols/protocol.cc
+index 470cc91..53675f5 100644
+--- c/main/protocols/protocol.cc
++++ w/main/protocols/protocol.cc
+@@ -78,6 +78,14 @@ void Protocol::SendMcpMessage(const std::string& payload) {
+     SendText(message);
+ }
+ 
++// Dotty: ambient perception event frame.
++void Protocol::SendEvent(const std::string& name, const std::string& data_json) {
++    std::string message = "{\"session_id\":\"" + session_id_ +
++                          "\",\"type\":\"event\",\"name\":\"" + name +
++                          "\",\"data\":" + data_json + "}";
++    SendText(message);
++}
++
+ bool Protocol::IsTimeout() const {
+     const int kTimeoutSeconds = 120;
+     auto now = std::chrono::steady_clock::now();
+diff --git c/main/protocols/protocol.h w/main/protocols/protocol.h
+index 28ef604..fd66f0f 100644
+--- c/main/protocols/protocol.h
++++ w/main/protocols/protocol.h
+@@ -73,6 +73,14 @@ public:
+     virtual void SendStopListening();
+     virtual void SendAbortSpeaking(AbortReason reason);
+     virtual void SendMcpMessage(const std::string& message);
++    // Dotty: ambient perception event frame.
++    // Emits {"type":"event","name":<name>,"data":<data_json>} server-bound.
++    virtual void SendEvent(const std::string& name, const std::string& data_json);
++
++    // Dotty: exposed for the proactive idle-channel reconnect in the
++    // main clock-tick handler. True if no incoming WS frame has arrived
++    // in kTimeoutSeconds (120 s).
++    virtual bool IsTimeout() const;
+ 
+ protected:
+     std::function<void(const cJSON* root)> on_incoming_json_;
+@@ -91,7 +99,6 @@ protected:
+ 
+     virtual bool SendText(const std::string& text) = 0;
+     virtual void SetError(const std::string& message);
+-    virtual bool IsTimeout() const;
+ };
+ 
+ #endif // PROTOCOL_H
+diff --git c/main/protocols/websocket_protocol.cc w/main/protocols/websocket_protocol.cc
+index f0cc034..34739af 100644
+--- c/main/protocols/websocket_protocol.cc
++++ w/main/protocols/websocket_protocol.cc
+@@ -78,6 +78,7 @@ bool WebsocketProtocol::IsAudioChannelOpened() const {
+ void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
+     (void)send_goodbye;  // Websocket doesn't need to send goodbye message
+     websocket_.reset();
++    vTaskDelay(pdMS_TO_TICKS(200));
+ }
+ 
+ bool WebsocketProtocol::OpenAudioChannel() {
+@@ -150,6 +151,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
+             auto root = cJSON_Parse(data);
+             auto type = cJSON_GetObjectItem(root, "type");
+             if (cJSON_IsString(type)) {
++                ESP_LOGE(TAG, "WS recv type=%s", type->valuestring);
+                 if (strcmp(type->valuestring, "hello") == 0) {
+                     ParseServerHello(root);
+                 } else {

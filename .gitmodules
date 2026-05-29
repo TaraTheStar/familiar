@@ -1,0 +1,3 @@
+[submodule "grimoire/third_party/whisper.cpp"]
+	path = grimoire/third_party/whisper.cpp
+	url = https://github.com/ggerganov/whisper.cpp.git

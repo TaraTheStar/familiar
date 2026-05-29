@@ -1,0 +1,13 @@
+/stackend
+/bin/
+*.test
+*.out
+.env
+# image export produced by `podman save` during deploy
+/stackend-dev.tar.gz
+# debug turn captures (-debug-dump-dir)
+/captures/
+# whisper.cpp build outputs and downloaded models
+/third_party/whisper.cpp/build/
+/third_party/whisper.cpp/models/ggml-*.bin
+/third_party/whisper.cpp/models/ggml-*.mlmodelc

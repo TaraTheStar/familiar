@@ -1,0 +1,18 @@
+# Don't ship local build artifacts into the container build context.
+# cmake stamps absolute paths into CMakeCache.txt which then mismatches
+# the in-container build location and fails.
+/stackend
+/bin/
+*.test
+*.out
+.env
+
+# whisper.cpp local cmake build outputs
+/third_party/whisper.cpp/build/
+
+# git
+/.git/
+
+# IDE
+/.vscode/
+/.idea/
