@@ -1,0 +1,1 @@
+{"type":"hello","transport":"websocket","session_id":"SID","audio_params":{"sample_rate":24000,"frame_duration":60}}

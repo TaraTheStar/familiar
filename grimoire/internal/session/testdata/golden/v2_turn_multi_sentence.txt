@@ -1,0 +1,17 @@
+{"type":"hello","id":1,"result":"ok","server":{"name":"stackchan-server","version":"0.1.0"},"audio":{"in":{"rate":16000,"frame_ms":60},"out":{"rate":24000,"frame_ms":60}},"features":["tools"],"time":{"unix_ms":0,"tz_offset_min":0},"flow_control":{"audio_credit_initial":40}}
+{"type":"transcript","text":"what time is it","final":true}
+{"type":"display","emotion":"thinking","status":"thinking"}
+{"type":"display","emotion":"happy","status":"speaking"}
+{"type":"audio_begin","utterance_id":1}
+{"type":"caption","utterance_id":1,"text":"Sentence one.","final":false}
+<binary opus 71 bytes>
+<binary opus 68 bytes>
+{"type":"caption","utterance_id":1,"text":"Sentence one. Sentence two!","final":false}
+<binary opus 68 bytes>
+<binary opus 68 bytes>
+{"type":"caption","utterance_id":1,"text":"Sentence one. Sentence two! And a final fragment","final":false}
+<binary opus 68 bytes>
+<binary opus 68 bytes>
+{"type":"caption","utterance_id":1,"text":"Sentence one. Sentence two! And a final fragment","final":true}
+{"type":"audio_end","utterance_id":1}
+{"type":"display","emotion":"neutral","status":"listening"}
