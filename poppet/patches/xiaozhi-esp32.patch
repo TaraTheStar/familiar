@@ -1,5 +1,30 @@
+diff --git c/main/Kconfig.projbuild w/main/Kconfig.projbuild
+index b4119fc..e6618a9 100644
+--- c/main/Kconfig.projbuild
++++ w/main/Kconfig.projbuild
+@@ -739,6 +739,20 @@ config WAKE_WORD_DETECTION_IN_LISTENING
+         which allows interrupting the current conversation.
+         When disabled (default), wake word detection is turned off during listening.
+ 
++config WAKE_WORD_DETECTION_IN_SPEAKING
++    bool "Enable Wake Word Detection in Speaking Mode (barge-in)"
++    default n
++    depends on USE_AFE_WAKE_WORD || USE_CUSTOM_WAKE_WORD
++    help
++        Enable wake word detection while the device is speaking (TTS playback),
++        which allows barge-in: interrupting the reply by saying the wake word.
++        When disabled (default), wake word detection is turned off during speaking.
++        On boards without effective AEC and with limited CPU, running wakenet +
++        AEC during playback starves the audio output task and cuts/corrupts the
++        TTS audio (and the wake word is not reliably detected anyway), so this is
++        off by default. Re-enable it once server-side AEC (USE_SERVER_AEC) makes
++        barge-in viable.
++
+ config USE_AUDIO_PROCESSOR
+     bool "Enable Audio Noise Reduction"
+     default y
 diff --git c/main/application.cc w/main/application.cc
-index d69d43d..02aea21 100644
+index d69d43d..fd413af 100644
 --- c/main/application.cc
 +++ w/main/application.cc
 @@ -55,9 +55,46 @@ Application::~Application() {
@@ -407,20 +432,28 @@ index d69d43d..02aea21 100644
              display->SetStatus(Lang::Strings::STANDBY);
              display->ClearChatMessages();  // Clear messages first
              display->SetEmotion("neutral"); // Then set emotion (wechat mode checks child count)
-@@ -911,8 +1038,10 @@ void Application::HandleStateChangedEvent() {
+@@ -911,8 +1038,18 @@ void Application::HandleStateChangedEvent() {
  
              if (listening_mode_ != kListeningModeRealtime) {
                  audio_service_.EnableVoiceProcessing(false);
 -                // Only AFE wake word can be detected in speaking mode
 -                audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
-+                // Only AFE wake word can be detected in speaking mode — but
-+                // keep it OFF while the privacy gate is on (a gated farewell
-+                // is allowed to play, but the mic/wake stay disabled).
++#ifdef CONFIG_WAKE_WORD_DETECTION_IN_SPEAKING
++                // Barge-in (opt-in via Kconfig): only AFE wake word can be
++                // detected in speaking mode — but keep it OFF while the privacy
++                // gate is on (a gated farewell is allowed to play, but the
++                // mic/wake stay disabled). OFF by default: on this no-AEC,
++                // CPU-limited board the wakenet+AEC task starves audio playback
++                // and cuts the TTS, and the wake word isn't reliably heard over
++                // the bot's own voice anyway.
 +                audio_service_.EnableWakeWordDetection(!privacy_gate_ && audio_service_.IsAfeWakeWord());
++#else
++                audio_service_.EnableWakeWordDetection(false);
++#endif
              }
              audio_service_.ResetDecoder();
              break;
-@@ -1066,12 +1195,34 @@ bool Application::CanEnterSleepMode() {
+@@ -1066,12 +1203,34 @@ bool Application::CanEnterSleepMode() {
      return true;
  }
  
