@@ -13,12 +13,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,8 +27,8 @@ import (
 
 	"github.com/TaraTheStar/familiar/grimoire/internal/audio"
 	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
-	"github.com/TaraTheStar/familiar/grimoire/internal/mcp"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
+	"github.com/TaraTheStar/familiar/grimoire/internal/protov2"
 	"github.com/TaraTheStar/familiar/grimoire/internal/tts"
 )
 
@@ -101,6 +101,13 @@ type Config struct {
 	// smoke testing against a real device.
 	HardcodedReply string
 
+	// AudioCreditInitial is the Protocol v2 server→device audio flow-control
+	// budget advertised in the hello: how many binary audio frames the server
+	// may send before any credit refill (PROTOCOL_V2 §5.1). 0 → 40 frames
+	// (≈2.4s at 60ms, matching the ESP32 decoder buffer). Ignored under v1,
+	// which paces audio against the wall clock instead.
+	AudioCreditInitial int
+
 	// MaxUtteranceMS caps the per-turn microphone buffer to bound memory
 	// (and protect against runaway streams). 0 = 30 seconds. Hitting the
 	// cap force-endpoints the turn rather than dropping audio forever.
@@ -151,6 +158,12 @@ func Handler(cfg Config) http.HandlerFunc {
 	if cfg.MCPInitTimeout == 0 {
 		cfg.MCPInitTimeout = 5 * time.Second
 	}
+	if cfg.ReadIdleTimeout == 0 {
+		// Match the firmware's 120s timeout: close half-open sockets instead of
+		// leaking them. v2 uses this as its liveness mechanism in place of WS
+		// ping/pong (PROTOCOL_V2 §3.4).
+		cfg.ReadIdleTimeout = 120 * time.Second
+	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		log := cfg.Logger.With(
@@ -158,6 +171,17 @@ func Handler(cfg Config) http.HandlerFunc {
 			"device_id", r.Header.Get("Device-Id"),
 			"client_id", r.Header.Get("Client-Id"),
 		)
+
+		// Select the wire protocol from the upgrade header before accepting.
+		// The header has existed since v1 (then always "1"); v2 devices send
+		// "2". Reject anything else with 426 Upgrade Required (PROTOCOL_V2 §2.2)
+		// rather than upgrading into a protocol we can't speak.
+		version, ok := parseProtocolVersion(r.Header.Get("Protocol-Version"))
+		if !ok {
+			log.Warn("rejecting unsupported protocol version", "header", r.Header.Get("Protocol-Version"))
+			http.Error(w, "unsupported Protocol-Version (expected 1 or 2)", http.StatusUpgradeRequired)
+			return
+		}
 
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			// Insecure here means we don't enforce same-origin; the device
@@ -197,14 +221,15 @@ func Handler(cfg Config) http.HandlerFunc {
 		maxBytes := cfg.MicAudio.SampleRate * cfg.MicAudio.Channels * 2 * cfg.MaxUtteranceMS / 1000
 
 		s := &Session{
-			conn:      conn,
-			cfg:       cfg,
-			log:       log,
-			closed:    make(chan struct{}),
-			encoder:   enc,
-			decoder:   dec,
-			micBufMax: maxBytes,
-			micBuf:    make([]byte, 0, maxBytes),
+			conn:            conn,
+			cfg:             cfg,
+			log:             log,
+			protocolVersion: version,
+			closed:          make(chan struct{}),
+			encoder:         enc,
+			decoder:         dec,
+			micBufMax:       maxBytes,
+			micBuf:          make([]byte, 0, maxBytes),
 		}
 		s.localTools, s.localHandlers = s.buildLocalTools()
 		s.run(ctx)
@@ -215,13 +240,14 @@ func Handler(cfg Config) http.HandlerFunc {
 // externally; all socket reads happen on the run() goroutine. Writes use
 // writeJSON which takes an internal lock.
 type Session struct {
-	conn      *websocket.Conn
-	cfg       Config
-	log       *slog.Logger
-	sessionID string
-	closed    chan struct{}
-	encoder   *audio.Encoder
-	decoder   *audio.Decoder
+	conn            *websocket.Conn
+	cfg             Config
+	log             *slog.Logger
+	protocolVersion int // 1 or 2, from the Protocol-Version upgrade header
+	sessionID       string
+	closed          chan struct{}
+	encoder         *audio.Encoder
+	decoder         *audio.Decoder
 
 	// micBuf accumulates decoded PCM (s16 little-endian) during a listen
 	// turn. Bounded by micBufMax to keep one rogue session from eating
@@ -254,10 +280,18 @@ type Session struct {
 	// state directly (which only the read-loop goroutine mutates).
 	rearm atomic.Bool
 
-	// speakMu is held for the full duration of a TTS response so two
-	// Speak() calls can't interleave their tts:start / frames / tts:stop
-	// sequences on the wire.
-	speakMu sync.Mutex
+	// turnCancel cancels the in-flight turn's context for barge-in (abort) and
+	// session teardown. Set in fireTurn, invoked by cancelTurn — both on the
+	// read-loop goroutine, so it needs no lock. nil between turns.
+	turnCancel context.CancelFunc
+
+	// out is the protocol-specific output sink (deviceOut) the voice loop
+	// sends through; dec maps inbound wire frames to normalized inEvents.
+	// Both are set after the handshake to the implementation selected by the
+	// Protocol-Version upgrade header (v1Out / v1Decoder today). The loop
+	// never touches a protocol.* type or the raw socket directly — see wire.go.
+	out deviceOut
+	dec wireDecoder
 
 	// dialogue is the running chat-completions message history for this
 	// session. dialogueMu guards it because handleTurn runs concurrently
@@ -266,19 +300,20 @@ type Session struct {
 	dialogueMu sync.Mutex
 	dialogue   []llm.Message
 
-	// mcpClient is set after a successful hello if Kokoro/LLM/ASR are
-	// configured. Used to query the device's tool registry and to
-	// dispatch tool calls during a turn.
-	mcpClient *mcp.Client
+	// toolPort is the device's tool registry, bound after the handshake to the
+	// implementation for the active protocol (v1ToolPort over MCP, v2ToolPort
+	// over first-class tool messages — see tools.go). nil if LLM is unconfigured.
+	// The loop discovers and calls device tools only through it.
+	toolPort toolPort
 
-	// tools is the list of tool descriptors fetched from the device.
-	// Pre-converted to llm.Tool format for fast injection into LLM
-	// requests. Empty if MCP is disabled or the device exposed no tools.
+	// tools is the device tool catalog discovered by initTools, pre-converted
+	// to llm.Tool format for fast injection into LLM requests. Empty until
+	// discovery finishes, or if the device exposed no tools.
 	toolsMu sync.RWMutex
 	tools   []llm.Tool
-	// toolByName indexes tools so the LLM-emitted tool_call name → tool
-	// lookup is cheap (used for permission checks etc.).
-	toolByName map[string]mcp.ToolDescriptor
+	// toolByName indexes the discovered tools by name (carries permission for
+	// future LLM-exposure filtering).
+	toolByName map[string]toolDescriptor
 
 	// localTools are server-side tools (e.g. get_current_time) advertised to
 	// the LLM alongside the device's MCP tools. localHandlers dispatches them
@@ -291,94 +326,52 @@ func (s *Session) run(ctx context.Context) {
 	defer close(s.closed)
 	defer s.conn.Close(websocket.StatusNormalClosure, "")
 
-	// Step 1: handshake. Waits for ClientHello, sends ServerHello.
-	if err := s.handshake(ctx); err != nil {
-		s.log.Warn("handshake failed", "err", err)
-		_ = s.conn.Close(websocket.StatusPolicyViolation, "handshake")
-		return
+	// Step 1: handshake, then bind the protocol seam selected by the
+	// Protocol-Version upgrade header. The voice loop (turn.go, mic.go) is
+	// identical from here on — it talks only to s.out / s.dec (see wire.go).
+	switch s.protocolVersion {
+	case 2:
+		if err := s.handshakeV2(ctx); err != nil {
+			s.log.Warn("v2 handshake failed", "err", err)
+			_ = s.conn.Close(websocket.StatusPolicyViolation, "handshake")
+			return
+		}
+		s.out = newV2Out(s.conn, s.encoder, s.log, s.audioCredit())
+		s.dec = v2Decoder{}
+		if s.cfg.LLM != nil {
+			s.toolPort = newV2ToolPort(s.conn, s.log)
+		}
+	default:
+		if err := s.handshake(ctx); err != nil {
+			s.log.Warn("handshake failed", "err", err)
+			_ = s.conn.Close(websocket.StatusPolicyViolation, "handshake")
+			return
+		}
+		s.out = newV1Out(s.conn, s.encoder, s.log)
+		s.dec = v1Decoder{}
+		if s.cfg.LLM != nil {
+			s.toolPort = newV1ToolPort(s.conn, s.sessionID, s.cfg.VisionURL, s.cfg.VisionToken, s.log)
+		}
 	}
 
-	s.log.Info("session established", "session_id", s.sessionID)
+	s.log.Info("session established", "session_id", s.sessionID, "protocol", s.protocolVersion)
 
-	// Step 2: spin up MCP initialization in a goroutine. initMCP needs
-	// the read loop running to receive its responses, so we can't block
-	// here. handleTurn fetches tools lazily via snapshotTools() and is
-	// fine with an empty list until initMCP finishes.
-	if s.cfg.LLM != nil {
-		go s.initMCP(ctx)
+	// Step 2: discover the device tool catalog in a goroutine. initTools waits
+	// on responses that arrive on the read loop, so it can't block here; the
+	// port is already bound (above) so inbound frames route correctly the moment
+	// they arrive. handleTurn reads tools lazily via snapshotTools and is fine
+	// with an empty list until discovery finishes.
+	if s.toolPort != nil {
+		go s.initTools(ctx)
 	}
 
 	// Step 3: read loop.
 	s.readLoop(ctx)
 
-	if s.mcpClient != nil {
-		s.mcpClient.Close()
+	if s.toolPort != nil {
+		s.toolPort.Close()
 	}
 	s.log.Info("session closed", "session_id", s.sessionID)
-}
-
-// initMCP runs the MCP initialize handshake against the device and pulls
-// the tool list. Stores the result on the session. Failures are logged
-// but non-fatal — the voice loop still works without tools.
-//
-// MUST run on a goroutine, NOT in the main session flow, because the
-// MCP responses arrive on the read loop which has to already be
-// pumping frames.
-func (s *Session) initMCP(ctx context.Context) {
-	// Set the client first so the read loop can route incoming MCP
-	// frames to it as soon as they start arriving (the device often
-	// sends MCP responses with very low latency).
-	client := mcp.NewClient(func(ctx context.Context, payload []byte) error {
-		return writeJSON(ctx, s.conn, protocol.MCP{
-			SessionID: s.sessionID,
-			Type:      "mcp",
-			Payload:   payload,
-		})
-	})
-	s.mcpClient = client
-
-	initCtx, cancel := context.WithTimeout(ctx, s.cfg.MCPInitTimeout)
-	defer cancel()
-
-	var capabilities json.RawMessage
-	if s.cfg.VisionURL != "" {
-		vis := map[string]string{"url": s.cfg.VisionURL}
-		if s.cfg.VisionToken != "" {
-			vis["token"] = s.cfg.VisionToken
-		}
-		capabilities, _ = json.Marshal(map[string]any{"vision": vis})
-	}
-
-	if _, err := client.Initialize(initCtx, capabilities); err != nil {
-		s.log.Warn("mcp initialize failed; running without tools", "err", err)
-		return
-	}
-
-	descs, err := client.ListTools(initCtx, false)
-	if err != nil {
-		s.log.Warn("mcp tools/list failed; running without tools", "err", err)
-		return
-	}
-
-	tools := make([]llm.Tool, 0, len(descs))
-	byName := make(map[string]mcp.ToolDescriptor, len(descs))
-	for _, d := range descs {
-		tools = append(tools, llm.Tool{
-			Type: "function",
-			Function: llm.ToolFunction{
-				Name:        d.Name,
-				Description: d.Description,
-				Parameters:  d.InputSchema,
-			},
-		})
-		byName[d.Name] = d
-	}
-	s.toolsMu.Lock()
-	s.tools = tools
-	s.toolByName = byName
-	s.toolsMu.Unlock()
-
-	s.log.Info("mcp ready", "tools", len(tools))
 }
 
 // snapshotTools returns a copy of the current tool list (safe to pass
@@ -437,6 +430,119 @@ func (s *Session) handshake(ctx context.Context) error {
 	return writeJSON(hsCtx, s.conn, resp)
 }
 
+// handshakeV2 performs the Protocol v2 hello exchange (PROTOCOL_V2 §3): read the
+// device's hello, reply with the negotiated audio params and the initial audio
+// credit. v2 drops the per-message session_id (the connection is the session),
+// so the minted id is for logs/correlation only and never goes on the wire.
+func (s *Session) handshakeV2(ctx context.Context) error {
+	hsCtx, cancel := context.WithTimeout(ctx, s.cfg.HandshakeTimeout)
+	defer cancel()
+
+	mt, data, err := s.conn.Read(hsCtx)
+	if err != nil {
+		return fmt.Errorf("read client hello: %w", err)
+	}
+	if mt != websocket.MessageText {
+		return fmt.Errorf("first frame must be text JSON, got %v", mt)
+	}
+
+	msg, err := protov2.Decode(data)
+	if err != nil {
+		return fmt.Errorf("decode client hello: %w", err)
+	}
+	hello, ok := msg.(protov2.ClientHello)
+	if !ok {
+		return fmt.Errorf("first frame must be type=hello, got %T", msg)
+	}
+
+	s.log.Info("client hello",
+		"version", 2,
+		"client", hello.Client.Name,
+		"mic_rate", hello.Audio.In.Rate,
+		"features", strings.Join(hello.Features, ","),
+	)
+
+	s.sessionID = newSessionID()
+	tts := s.cfg.TTSAudio
+	mic := s.cfg.MicAudio
+
+	// Server capabilities advertised to the device. "tools" is always present
+	// (we discover and call device tools); "vision" only when a callback URL is
+	// configured. The server dictates audio params (it does not negotiate the
+	// device's offer — PROTOCOL_V2 §3.2): fixed 16k mic / 24k TTS hardware.
+	features := []string{"tools"}
+	if s.cfg.VisionURL != "" {
+		features = append(features, "vision")
+	}
+
+	resp := protov2.ServerHello{
+		Type:   "hello",
+		ID:     hello.ID, // echo the request id (PROTOCOL_V2 §3.2)
+		Result: "ok",
+		Server: &protov2.ServerInfo{Name: serverName, Version: serverVersion},
+		Audio: &protov2.AudioConfig{
+			In:  protov2.AudioStream{Rate: mic.SampleRate, FrameMS: mic.FrameDuration},
+			Out: protov2.AudioStream{Rate: tts.SampleRate, FrameMS: tts.FrameDuration},
+		},
+		Features:    features,
+		Time:        s.clockSync(),
+		FlowControl: &protov2.FlowControl{AudioCreditInitial: s.audioCredit()},
+	}
+	// vision_url is advertised here (not in discovery) so it can move freely.
+	if s.cfg.VisionURL != "" {
+		resp.VisionURL = s.cfg.VisionURL
+	}
+	return writeJSON(hsCtx, s.conn, resp)
+}
+
+// Server identity advertised in the v2 hello.
+const (
+	serverName    = "stackchan-server"
+	serverVersion = "0.1.0"
+)
+
+// clockSync builds the device clock-sync payload for the v2 hello (§3.2),
+// folding v1's separate OTA server_time round-trip into the handshake. The
+// timezone is cfg.TimeLocation (the container runs in UTC, so set it to the
+// user's zone for a correct local-time offset); nil falls back to UTC, which
+// also keeps the value machine-independent in tests.
+func (s *Session) clockSync() *protov2.TimeSync {
+	loc := s.cfg.TimeLocation
+	if loc == nil {
+		loc = time.UTC
+	}
+	now := time.Now()
+	_, offsetSec := now.In(loc).Zone()
+	return &protov2.TimeSync{
+		UnixMS:      now.UnixMilli(),
+		TZOffsetMin: offsetSec / 60,
+	}
+}
+
+// audioCredit is the v2 initial audio flow-control budget, falling back to the
+// default when unset.
+func (s *Session) audioCredit() int {
+	if s.cfg.AudioCreditInitial > 0 {
+		return s.cfg.AudioCreditInitial
+	}
+	return defaultAudioCredit
+}
+
+// parseProtocolVersion maps the Protocol-Version upgrade header to a supported
+// wire version. An empty header defaults to v1 (the header has existed since v1
+// but old firmware may omit it). Anything other than 1 or 2 is rejected (the
+// caller responds 426 Upgrade Required).
+func parseProtocolVersion(header string) (version int, ok bool) {
+	switch strings.TrimSpace(header) {
+	case "", "1":
+		return 1, true
+	case "2":
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
 func (s *Session) readLoop(ctx context.Context) {
 	for {
 		readCtx := ctx
@@ -463,7 +569,7 @@ func (s *Session) readLoop(ctx context.Context) {
 
 		switch mt {
 		case websocket.MessageBinary:
-			s.onAudioFrame(data)
+			s.onAudioFrame(ctx, data)
 		case websocket.MessageText:
 			s.dispatchText(ctx, data)
 		}
@@ -488,7 +594,7 @@ func (s *Session) armListen() {
 	}
 }
 
-func (s *Session) onAudioFrame(opusBytes []byte) {
+func (s *Session) onAudioFrame(ctx context.Context, opusBytes []byte) {
 	if !s.listening {
 		// We're between turns. If the previous turn produced no spoken reply,
 		// the device (in auto mode) is still in its Listening state streaming
@@ -508,7 +614,7 @@ func (s *Session) onAudioFrame(opusBytes []byte) {
 		// hang the turn), treat it as a forced endpoint and process what
 		// we have.
 		s.log.Warn("mic buffer full; forcing endpoint", "limit_bytes", s.micBufMax)
-		s.fireTurn("buffer-full")
+		s.fireTurn(ctx, "buffer-full")
 		return
 	}
 	before := len(s.micBuf)
@@ -533,51 +639,104 @@ func (s *Session) onAudioFrame(opusBytes []byte) {
 			"speech_ms", s.ep.speechMS,
 			"silence_ms", s.ep.silenceMS)
 		if fired {
-			s.fireTurn("server-vad")
+			s.fireTurn(ctx, "server-vad")
 		}
 	}
 }
 
-func (s *Session) dispatchText(_ context.Context, data []byte) {
-	msg, err := protocol.Decode(data)
+func (s *Session) dispatchText(ctx context.Context, data []byte) {
+	ev, err := s.dec.Decode(data)
 	if err != nil {
 		s.log.Warn("decode failed", "err", err, "raw", string(data))
+		// A malformed frame is a protocol violation (PROTOCOL_V2 §9.4): report
+		// it and keep the session alive. No-op under v1 (no error message type).
+		s.sendError(ctx, "PROTOCOL_VIOLATION", err.Error(), 0)
 		return
 	}
-	switch m := msg.(type) {
-	case protocol.ClientHello:
+	switch e := ev.(type) {
+	case evDupHello:
 		s.log.Warn("duplicate hello received")
-	case protocol.Listen:
-		s.log.Info("listen", "state", m.State, "mode", m.Mode, "wake_text", m.Text)
-		switch m.State {
-		case "start":
-			// Device-driven listen start supersedes any pending re-arm.
-			// auto-stop mode (or unspecified, which the firmware uses as the
-			// AEC-off default) means the device streams continuously and never
-			// sends listen:stop — we endpoint server-side. Manual mode sends
-			// its own listen:stop, so skip the detector.
-			s.autoStop = m.Mode == "auto" || m.Mode == ""
-			s.rearm.Store(false)
-			s.armListen()
-		case "stop":
-			// Device-initiated stop (manual mode / barge-in). Fire the turn.
-			s.fireTurn("device-stop")
-		case "detect":
-			// Wake word fired. Currently informational; voice loop
-			// triggers on the subsequent listen:start.
-		}
-	case protocol.Abort:
-		s.log.Info("abort", "reason", m.Reason)
-	case protocol.MCP:
-		if s.mcpClient != nil {
-			s.mcpClient.HandleIncoming(m.Payload)
+	case evListenStart:
+		s.log.Info("listen start", "mode", e.Mode)
+		// Device-driven listen start supersedes any pending re-arm. auto-stop
+		// mode (or unspecified, which the firmware uses as the AEC-off default)
+		// means the device streams continuously and never sends listen:stop —
+		// we endpoint server-side. Manual mode sends its own stop, so skip the
+		// detector.
+		s.autoStop = e.Mode == "auto" || e.Mode == ""
+		s.rearm.Store(false)
+		s.armListen()
+	case evListenStop:
+		// Device-initiated stop (manual mode / device VAD). Fire the turn.
+		s.log.Info("listen stop")
+		s.fireTurn(ctx, "device-stop")
+	case evWake:
+		// Wake word fired. Informational from idle (the turn starts on the
+		// subsequent listen_start); a barge-in wake is followed by abort, which
+		// is what actually cancels the in-flight reply (PROTOCOL_V2 §4.2).
+		s.log.Info("wake", "phrase", e.Phrase)
+	case evAbort:
+		// Barge-in: cancel the in-flight turn. The TTS sink emits audio_cancel
+		// (v2) / tts:stop (v1) as it unwinds; a fresh turn follows.
+		s.log.Info("abort", "reason", e.Reason)
+		s.cancelTurn()
+	case evMCP:
+		// v1 tool response (MCP payload). Route to the tool port if one is bound.
+		if s.toolPort != nil {
+			s.toolPort.HandleIncoming(e.Payload)
 		} else {
-			s.log.Debug("mcp message but no client", "bytes", len(m.Payload))
+			s.log.Debug("mcp message but no tool port", "bytes", len(e.Payload))
 		}
-	case protocol.Event:
-		s.log.Info("event", "name", m.Name)
-	case protocol.Unknown:
-		s.log.Info("unknown message type", "type", m.Type)
+	case evToolResponse:
+		// v2 first-class tool response (whole frame). Same routing.
+		if s.toolPort != nil {
+			s.toolPort.HandleIncoming(e.Raw)
+		} else {
+			s.log.Debug("tool message but no tool port", "bytes", len(e.Raw))
+		}
+	case evTelemetry:
+		s.log.Info("event", "name", e.Name)
+	case evAudioCredit:
+		// v2 audio flow control: route the refill to the in-flight TTS stream.
+		// Only the v2 sink implements creditSink; v1 never produces this event.
+		if cs, ok := s.out.(creditSink); ok {
+			cs.AddCredit(e.Frames)
+		}
+	case evGoodbye:
+		// Advisory only; the WS close frame does the real work (PROTOCOL_V2 §4.10).
+		s.log.Info("goodbye", "reason", e.Reason)
+	case evError:
+		s.log.Warn("device error", "code", e.Code, "message", e.Message)
+	case evUnknown:
+		s.log.Info("unknown message type", "type", e.Type)
+	}
+}
+
+// sendError reports a protocol error to the device when the active protocol
+// supports one (PROTOCOL_V2 §9); under v1 it is a no-op. It is suppressed when
+// ctx is already cancelled, so a deliberate barge-in (which surfaces as
+// "context canceled" deep in the turn) is never misreported as a failure.
+func (s *Session) sendError(ctx context.Context, code, message string, refID int) {
+	if ctx.Err() != nil {
+		return
+	}
+	if es, ok := s.out.(errorSink); ok {
+		es.SendError(ctx, code, message, refID)
+	}
+}
+
+// classifyTurnError maps a turn-pipeline error to a v2 error code by inspecting
+// the wrapper prefixes streamReply adds ("llm stream:", "tts ...:"). A coarse
+// mapping is enough for the device to log/degrade; INTERNAL is the catch-all.
+func classifyTurnError(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "llm"):
+		return "LLM_FAILED"
+	case strings.Contains(msg, "tts") || strings.Contains(msg, "kokoro") || strings.Contains(msg, "speak"):
+		return "TTS_FAILED"
+	default:
+		return "INTERNAL"
 	}
 }
 

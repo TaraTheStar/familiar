@@ -5,15 +5,19 @@ package session
 import "context"
 
 // fireTurn ends the current listening window and dispatches the captured
-// utterance into the pipeline. Called from two places, both on the read-loop
-// goroutine: the server-side endpoint detector (auto-stop mode) and an
-// incoming device listen:stop (manual mode). The `reason` is logged so we can
-// tell which path fired when reading logs.
+// utterance into the pipeline. Called from three places, all on the read-loop
+// goroutine: the server-side endpoint detector (auto-stop mode), an incoming
+// device listen_stop (manual mode), and a buffer-full force-endpoint. The
+// `reason` is logged so we can tell which path fired when reading logs.
 //
 // It must run on the read-loop goroutine (no locking on listening/micBuf/ep)
 // and it hands the actual ASR→LLM→TTS work to a goroutine so the read loop
-// keeps pumping frames (and MCP responses) while the turn runs.
-func (s *Session) fireTurn(reason string) {
+// keeps pumping frames (and tool responses) while the turn runs.
+//
+// The turn runs under a cancelable child of the session context, its cancel
+// func stored on the session so a barge-in (abort) can interrupt the in-flight
+// ASR/LLM/TTS (see cancelTurn). ctx is the session context.
+func (s *Session) fireTurn(ctx context.Context, reason string) {
 	if !s.listening {
 		return // already fired this turn; ignore duplicate triggers
 	}
@@ -28,17 +32,41 @@ func (s *Session) fireTurn(reason string) {
 	switch {
 	case s.cfg.HardcodedReply != "":
 		s.log.Info("turn fired (hardcoded reply)", "reason", reason, "pcm_bytes", len(turn))
+		turnCtx, cancel := s.beginTurn(ctx)
 		go func() {
-			if err := s.Speak(context.Background(), s.cfg.HardcodedReply); err != nil {
+			defer cancel()
+			if err := s.speakReply(turnCtx, s.cfg.HardcodedReply); err != nil {
 				s.log.Warn("hardcoded reply failed", "err", err)
 			}
 		}()
 	case s.cfg.ASR != nil && s.cfg.LLM != nil:
 		s.log.Info("turn fired", "reason", reason, "pcm_bytes", len(turn), "approx_ms", approxMS)
-		go s.handleTurn(context.Background(), turn)
+		turnCtx, cancel := s.beginTurn(ctx)
+		go func() {
+			defer cancel()
+			s.handleTurn(turnCtx, turn)
+		}()
 	case len(turn) > 0:
 		s.log.Info("captured utterance (no pipeline configured)",
 			"reason", reason, "pcm_bytes", len(turn), "approx_ms", approxMS)
+	}
+}
+
+// beginTurn derives a cancelable context for a turn and records its cancel func
+// so cancelTurn (barge-in) can interrupt it. Read-loop goroutine only, so no
+// locking: fireTurn and cancelTurn never run concurrently. The turn goroutine
+// must defer the returned cancel to release the context when it ends.
+func (s *Session) beginTurn(ctx context.Context) (context.Context, context.CancelFunc) {
+	turnCtx, cancel := context.WithCancel(ctx)
+	s.turnCancel = cancel
+	return turnCtx, cancel
+}
+
+// cancelTurn interrupts the in-flight turn, if any. Idempotent: a finished
+// turn's cancel is a harmless no-op. Read-loop goroutine only.
+func (s *Session) cancelTurn() {
+	if s.turnCancel != nil {
+		s.turnCancel()
 	}
 }
 

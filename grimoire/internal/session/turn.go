@@ -12,7 +12,6 @@ import (
 	"unicode"
 
 	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
-	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 )
 
 // maxToolIterations caps the LLM→tool→LLM loop. The LLM should reach a
@@ -74,6 +73,7 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	transcript, err := s.cfg.ASR.Transcribe(samples)
 	if err != nil {
 		s.log.Warn("turn: ASR failed", "err", err)
+		s.sendError(ctx, "ASR_FAILED", err.Error(), 0)
 		return
 	}
 	s.log.Info("turn: raw transcript", "text", transcript) // pre-filter, for tuning
@@ -84,12 +84,12 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	}
 	s.log.Info("turn: transcript", "text", transcript)
 
-	if err := writeJSON(ctx, s.conn, protocol.STT{Type: "stt", Text: transcript}); err != nil {
-		s.log.Warn("turn: send stt failed", "err", err)
+	if err := s.out.Transcript(ctx, transcript); err != nil {
+		s.log.Warn("turn: send transcript failed", "err", err)
 	}
 
 	// Drive the avatar to "thinking" while the LLM works.
-	s.setEmotion(ctx, "thinking")
+	_ = s.out.Display(ctx, "thinking", "thinking")
 
 	// Seed dialogue with this user turn.
 	s.dialogueMu.Lock()
@@ -101,10 +101,23 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	deferred, err := s.runToolLoop(ctx)
 	if err != nil {
 		s.log.Warn("turn: loop failed", "err", err)
+		// Report LLM/TTS failures to the device (suppressed on a barge-in
+		// cancel, where ctx is already done — see sendError).
+		s.sendError(ctx, classifyTurnError(err), err.Error(), 0)
+	}
+
+	// Barge-in / session teardown: the turn was cancelled. The TTS sink already
+	// emitted audio_cancel as it unwound; stop here without the neutral reset,
+	// deferred tools, or exit close. Issuing those writes with a cancelled
+	// context would fail and make the WS layer tear down the whole connection,
+	// and the interrupting turn will set its own display state anyway.
+	if ctx.Err() != nil {
+		s.log.Info("turn: cancelled (barge-in); skipping wrap-up")
+		return
 	}
 
 	// Reset emotion when done.
-	s.setEmotion(ctx, "neutral")
+	_ = s.out.Display(ctx, "neutral", "listening")
 
 	// Now run any deferred state changes (e.g. go-to-sleep). Doing this LAST —
 	// after all speech and the neutral reset — means the device talks
@@ -133,15 +146,7 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	// idle. Firmware re-opens lazily on the next wake word.
 	if isExitPhrase(transcript) {
 		s.log.Info("turn: exit phrase detected; closing session", "phrase", transcript)
-		_ = s.closeNormal()
-	}
-}
-
-// setEmotion sends a `llm` frame to drive the avatar. Best-effort — log
-// + continue on error since this is cosmetic.
-func (s *Session) setEmotion(ctx context.Context, emotion string) {
-	if err := writeJSON(ctx, s.conn, protocol.LLM{Type: "llm", Emotion: emotion}); err != nil {
-		s.log.Debug("set emotion failed", "emotion", emotion, "err", err)
+		_ = s.out.Close(ctx, "goodbye")
 	}
 }
 
@@ -164,50 +169,11 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 		msgs = append(msgs, s.dialogue...)
 		s.dialogueMu.Unlock()
 
-		var (
-			sb        sentenceBuffer
-			assembled string
-			toolCalls []llm.ToolCall
-			spoke     bool
-		)
-		// One Speaking session for this whole LLM text response: every
-		// sentence streams into a single tts:start … tts:stop so the
-		// device never drops to Listening mid-reply and clips later
-		// sentences (e.g. a joke's punchline). Closed before we return.
-		tts := s.newTTSSession()
-		for ev, err := range s.cfg.LLM.Stream(ctx, msgs, tools) {
-			if err != nil {
-				_ = tts.Close(ctx)
-				return deferred, fmt.Errorf("llm stream: %w", err)
-			}
-			if ev.ToolCall != nil {
-				toolCalls = append(toolCalls, *ev.ToolCall)
-				continue
-			}
-			if ev.Content == "" {
-				continue
-			}
-			assembled += ev.Content
-			for _, sentence := range sb.Add(ev.Content) {
-				if err := tts.Speak(ctx, sentence); err != nil {
-					_ = tts.Close(ctx)
-					return deferred, fmt.Errorf("tts mid-stream: %w", err)
-				}
-				spoke = true
-			}
-		}
-		// Speak any unterminated trailing fragment.
-		if tail := sb.Flush(); tail != "" {
-			if err := tts.Speak(ctx, tail); err != nil {
-				_ = tts.Close(ctx)
-				return deferred, fmt.Errorf("tts tail: %w", err)
-			}
-			spoke = true
-		}
-		// End the Speaking session (drains the lead, sends tts:stop) before
-		// dispatching tools or looping back to the LLM.
-		if err := tts.Close(ctx); err != nil {
-			return deferred, fmt.Errorf("tts close: %w", err)
+		// Stream one LLM response into a single Speaking session (see
+		// streamReply). spoke is true iff any sentence was actually voiced.
+		assembled, toolCalls, spoke, err := s.streamReply(ctx, msgs, tools)
+		if err != nil {
+			return deferred, err
 		}
 
 		// Record what the assistant just said + did.
@@ -267,6 +233,74 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 	return deferred, nil
 }
 
+// streamReply consumes one LLM stream, voicing assistant text as it arrives
+// and collecting any tool calls. The whole text response is one Speaking
+// session — a single SpeakBegin … SpeakEnd pair regardless of sentence count —
+// so the device never drops to Listening mid-reply and clips later sentences
+// (a joke's punchline is the classic casualty; see docs/PROTOCOL_V1.md §5.2).
+// SpeakBegin is lazy (first voiced sentence) so a tool-only turn emits no audio
+// frames, and SpeakEnd is deferred so the session is always closed — even on a
+// stream error — leaving the device out of Speaking.
+//
+// spoke reports whether any sentence was actually voiced.
+func (s *Session) streamReply(ctx context.Context, msgs []llm.Message, tools []llm.Tool) (assembled string, toolCalls []llm.ToolCall, spoke bool, err error) {
+	var sb sentenceBuffer
+
+	// begin opens the Speaking session on the first voiced sentence: smile,
+	// then SpeakBegin. Idempotent within a reply.
+	begin := func() error {
+		if spoke {
+			return nil
+		}
+		_ = s.out.Display(ctx, "happy", "speaking")
+		if e := s.out.SpeakBegin(ctx); e != nil {
+			return e
+		}
+		spoke = true
+		return nil
+	}
+	speak := func(sentence string) error {
+		if e := begin(); e != nil {
+			return e
+		}
+		return s.speakSentence(ctx, sentence)
+	}
+
+	// Always end the Speaking session before returning (no-op if never begun).
+	// Preserve the first error: a stream/tts failure outranks a close failure.
+	defer func() {
+		if e := s.out.SpeakEnd(ctx); e != nil && err == nil {
+			err = fmt.Errorf("tts close: %w", e)
+		}
+	}()
+
+	for ev, e := range s.cfg.LLM.Stream(ctx, msgs, tools) {
+		if e != nil {
+			return assembled, toolCalls, spoke, fmt.Errorf("llm stream: %w", e)
+		}
+		if ev.ToolCall != nil {
+			toolCalls = append(toolCalls, *ev.ToolCall)
+			continue
+		}
+		if ev.Content == "" {
+			continue
+		}
+		assembled += ev.Content
+		for _, sentence := range sb.Add(ev.Content) {
+			if e := speak(sentence); e != nil {
+				return assembled, toolCalls, spoke, fmt.Errorf("tts mid-stream: %w", e)
+			}
+		}
+	}
+	// Speak any unterminated trailing fragment.
+	if tail := sb.Flush(); tail != "" {
+		if e := speak(tail); e != nil {
+			return assembled, toolCalls, spoke, fmt.Errorf("tts tail: %w", e)
+		}
+	}
+	return assembled, toolCalls, spoke, nil
+}
+
 // isSleepCommand reports whether a tool call is the device's go-to-sleep
 // state change, which we defer until after the turn's speech.
 func isSleepCommand(tc llm.ToolCall) bool {
@@ -282,12 +316,14 @@ func isSleepCommand(tc llm.ToolCall) bool {
 	return args.State == "sleep"
 }
 
-// dispatchToolCall sends one tool call to the device via MCP and
-// returns the textual result (or an error message string suitable for
-// feeding back to the LLM as the tool's "content").
+// dispatchToolCall routes one LLM-emitted tool call: server-side ("local")
+// tools are handled in-process, device tools go through the protocol-agnostic
+// toolPort (MCP under v1, first-class tool_call under v2). Returns the textual
+// result, or an error-message string suitable to feed back to the LLM as the
+// tool's "content".
 func (s *Session) dispatchToolCall(ctx context.Context, tc llm.ToolCall) (string, error) {
 	// Server-side tools (e.g. get_current_time) are handled locally, not
-	// forwarded over MCP to the device.
+	// forwarded to the device.
 	if h, ok := s.localHandlers[tc.Function.Name]; ok {
 		s.log.Info("turn: local tool call", "name", tc.Function.Name, "args", tc.Function.Arguments)
 		result, err := h(ctx, json.RawMessage(tc.Function.Arguments))
@@ -298,27 +334,21 @@ func (s *Session) dispatchToolCall(ctx context.Context, tc llm.ToolCall) (string
 		return result, nil
 	}
 
-	if s.mcpClient == nil {
-		return "Tool not available (MCP not initialized).", fmt.Errorf("mcp not initialized")
+	if s.toolPort == nil {
+		return "Tool not available (no device tool registry).", fmt.Errorf("no tool port")
 	}
 	s.log.Info("turn: tool call", "name", tc.Function.Name, "args", tc.Function.Arguments)
 
-	// LLM gives us arguments as a JSON string; MCP wants RawMessage.
+	// LLM gives arguments as a JSON string; the port wants RawMessage.
 	args := json.RawMessage(tc.Function.Arguments)
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
 
-	result, err := s.mcpClient.CallTool(ctx, tc.Function.Name, args)
+	text, err := s.toolPort.CallTool(ctx, tc.Function.Name, args)
 	if err != nil {
 		// Surface error text back to the LLM so it can adapt.
 		return fmt.Sprintf("Tool call failed: %v", err), err
-	}
-	text := result.Text()
-	if text == "" {
-		// Tool ran but returned no text content (e.g. a setter). Tell the
-		// LLM it succeeded.
-		text = "ok"
 	}
 	s.log.Info("turn: tool result", "name", tc.Function.Name, "result", truncate(text, 120))
 	return text, nil
