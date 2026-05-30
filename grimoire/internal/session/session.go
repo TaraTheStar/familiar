@@ -109,6 +109,14 @@ type Config struct {
 	// which paces audio against the wall clock instead.
 	AudioCreditInitial int
 
+	// TTSTailPadMS is how much trailing silence (ms) to append to each v2 reply
+	// before audio_end. v2 has no wall-clock drain (unlike v1's ttsLead), so the
+	// device can leave the speaking state just before its buffer empties and
+	// clip the last word. 0 (the zero value) → no pad, so v2 stays frame-for-frame
+	// equivalent to v1 by default; the binary opts in (400ms mirrors v1's
+	// ttsLead). v1 ignores it.
+	TTSTailPadMS int
+
 	// MaxUtteranceMS caps the per-turn microphone buffer to bound memory
 	// (and protect against runaway streams). 0 = 30 seconds. Hitting the
 	// cap force-endpoints the turn rather than dropping audio forever.
@@ -337,7 +345,7 @@ func (s *Session) run(ctx context.Context) {
 			_ = s.conn.Close(websocket.StatusPolicyViolation, "handshake")
 			return
 		}
-		s.out = newV2Out(s.conn, s.encoder, s.log, s.audioCredit())
+		s.out = newV2Out(s.conn, s.encoder, s.log, s.audioCredit(), s.tailPadFrames())
 		s.dec = v2Decoder{}
 		if s.cfg.LLM != nil {
 			s.toolPort = newV2ToolPort(s.conn, s.log)
@@ -527,6 +535,16 @@ func (s *Session) audioCredit() int {
 		return s.cfg.AudioCreditInitial
 	}
 	return defaultAudioCredit
+}
+
+// tailPadFrames is the number of trailing silent frames appended to each v2
+// reply, derived from TTSTailPadMS and the TTS frame duration. 0 → no pad.
+func (s *Session) tailPadFrames() int {
+	frameMS := s.cfg.TTSAudio.FrameDuration
+	if s.cfg.TTSTailPadMS <= 0 || frameMS <= 0 {
+		return 0
+	}
+	return s.cfg.TTSTailPadMS / frameMS
 }
 
 // parseProtocolVersion maps the Protocol-Version upgrade header to a supported

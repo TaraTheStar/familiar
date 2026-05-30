@@ -178,6 +178,46 @@ func TestV1V2Equivalence(t *testing.T) {
 	}
 }
 
+// TestV2TTSTailPad verifies the v2 reply gains exactly TTSTailPadMS worth of
+// trailing (silent) frames — the drain-less-exit clip guard — and that the
+// zero value adds none (preserving v1/v2 frame equivalence by default).
+func TestV2TTSTailPad(t *testing.T) {
+	const (
+		kokoroPCM = 1440 // one 60ms content frame at 24kHz
+		frameMS   = 60
+		padMS     = 240 // → 4 pad frames
+	)
+	framesFor := func(t *testing.T, tailPadMS int) int {
+		t.Helper()
+		kokoro := constantPCMKokoro(t, kokoroPCM)
+		defer kokoro.Close()
+		llmServer := sentenceStreamLLM(t, "Hello!")
+		defer llmServer.Close()
+		cfg := Config{
+			TTSAudio:         protocol.AudioParams{SampleRate: 24000, FrameDuration: frameMS},
+			MicAudio:         protocol.AudioParams{SampleRate: 16000, Channels: 1, FrameDuration: frameMS},
+			HandshakeTimeout: 2 * time.Second,
+			MCPInitTimeout:   200 * time.Millisecond,
+			Kokoro:           &tts.KokoroClient{BaseURL: kokoro.URL},
+			ASR:              &fakeASR{out: "hi"},
+			LLM:              &llm.Client{BaseURL: llmServer.URL, Model: "test-model"},
+			TTSTailPadMS:     tailPadMS,
+		}
+		turn := parseV2Turn(recordSessionV2(t, cfg, func(t *testing.T, ctx context.Context, conn *websocket.Conn) {
+			mustWriteText(t, ctx, conn, mustJSON(t, protov2.ListenStart{Type: "listen_start", Mode: "auto"}))
+			sendFakeAudioFrame(t, ctx, conn)
+			mustWriteText(t, ctx, conn, mustJSON(t, protov2.ListenStop{Type: "listen_stop"}))
+		}))
+		return turn.audioFrames
+	}
+
+	base := framesFor(t, 0)
+	padded := framesFor(t, padMS)
+	if want := base + padMS/frameMS; padded != want {
+		t.Errorf("tail pad frames: base=%d padded=%d, want %d (+%d)", base, padded, want, padMS/frameMS)
+	}
+}
+
 func assertSemanticEqual(t *testing.T, v1, v2 semanticTurn, wantClose bool) {
 	t.Helper()
 	if v1.transcript != v2.transcript {

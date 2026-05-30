@@ -51,15 +51,24 @@ type v2Out struct {
 	credits atomic.Int64
 	wake    chan struct{}
 
+	// tailPadFrames is how many silent frames to append before audio_end. v2
+	// has no wall-clock drain (unlike v1's ttsLead), so the device can leave the
+	// speaking state a hair before its decode/playback buffer fully empties,
+	// clipping the last fraction of a word — most audible on a short reply
+	// ending on key info (e.g. a date). The pad makes that early cut land in
+	// silence instead of mid-speech.
+	tailPadFrames int
+
 	nextUtterance atomic.Int64 // monotonic utterance_id source, starts at 1
 }
 
-func newV2Out(conn *websocket.Conn, encoder *audio.Encoder, log *slog.Logger, initialCredit int) *v2Out {
+func newV2Out(conn *websocket.Conn, encoder *audio.Encoder, log *slog.Logger, initialCredit, tailPadFrames int) *v2Out {
 	o := &v2Out{
-		conn:    conn,
-		encoder: encoder,
-		log:     log,
-		wake:    make(chan struct{}, 1),
+		conn:          conn,
+		encoder:       encoder,
+		log:           log,
+		wake:          make(chan struct{}, 1),
+		tailPadFrames: tailPadFrames,
 	}
 	o.credits.Store(int64(initialCredit))
 	return o
@@ -199,6 +208,25 @@ func (o *v2Out) SpeakEnd(ctx context.Context) error {
 			return fmt.Errorf("send audio_cancel: %w", err)
 		}
 		return nil
+	}
+
+	// Tail pad: append a short run of silent frames so the device's (drain-less)
+	// exit from the speaking state clips trailing silence, not the last word.
+	// Best-effort — a credit/write failure here must not block the normal close.
+	if o.tailPadFrames > 0 {
+		silence := make([]int16, o.encoder.SamplesPerFrame())
+		for i := 0; i < o.tailPadFrames; i++ {
+			if err := o.acquireCredit(ctx); err != nil {
+				break
+			}
+			opusBytes, err := o.encoder.Encode(silence)
+			if err != nil {
+				break
+			}
+			if err := o.conn.Write(sendCtx, websocket.MessageBinary, append([]byte(nil), opusBytes...)); err != nil {
+				break
+			}
+		}
 	}
 
 	// Terminal caption marker: Final=true with no Text. The full cumulative text

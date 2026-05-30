@@ -71,6 +71,21 @@ func main() {
 		// rebuild (v1 ignores it). 0 = built-in default (40 frames ≈ 2.4s).
 		audioCreditInitial = flag.Int("v2-audio-credit", 0, "Protocol v2: initial server→device audio credit in 60ms frames (0=default 40)")
 
+		// TTS output rate dictated to the device. 16000 matches the StackChan's
+		// native (AEC-locked) 16kHz output, so the device plays Opus straight
+		// from the decoder with no on-device resample — the server downsamples
+		// Kokoro's fixed 24kHz instead. 24000 reverts to Kokoro-native (the
+		// device then resamples 24k→16k itself, which competes with wakenet/AEC
+		// during playback). Tunable for A/B without a rebuild. Must be an Opus
+		// rate (8000/12000/16000/24000).
+		ttsSampleRate = flag.Int("tts-sample-rate", 16000, "TTS sample rate dictated to the device in Hz (16000=device-native, no on-device resample; 24000=Kokoro-native)")
+
+		// Trailing silence appended to each v2 reply. v2 has no wall-clock drain,
+		// so the device can exit speaking just before its buffer empties and clip
+		// the last word; this pad makes that cut land in silence. 400ms mirrors
+		// v1's ttsLead; 0 disables.
+		ttsTailPadMS = flag.Int("tts-tail-pad-ms", 400, "Protocol v2: trailing silence (ms) appended to each reply so the device doesn't clip the last word (0=off)")
+
 		// Leading wake-beep removal (the chime bleeds into the mic with no AEC).
 		beepTrimMaxMS     = flag.Int("asr-beep-trim-ms", 600, "ASR: scan this many leading ms for the wake beep and trim it before transcription (0 disables)")
 		beepTrimThreshold = flag.Float64("asr-beep-threshold", 0, "ASR: mean-abs amplitude separating the beep from speech (0=default 2000)")
@@ -101,6 +116,13 @@ func main() {
 	// Mount /ota/ too so either discovery path works without a reflash.
 	mux.HandleFunc("/xiaozhi/ota/", otaHandler)
 	mux.HandleFunc("/ota/", otaHandler)
+	// Tolerate the no-trailing-slash form too. A device flashed with
+	// CONFIG_OTA_URL=".../xiaozhi/ota" (no slash) would otherwise hit the
+	// subtree-redirect to "/xiaozhi/ota/" (a 307 the ESP OTA client won't
+	// follow). These exact patterns out-rank the "/xiaozhi/" session subtree, so
+	// the bare path returns the OTA body directly instead of redirecting.
+	mux.HandleFunc("/xiaozhi/ota", otaHandler)
+	mux.HandleFunc("/ota", otaHandler)
 	// Protocol v2 discovery (PROTOCOL_V2 §2.1): the lean {ws_url, firmware?}
 	// shape. v1 firmware keeps using /ota; v2 firmware uses /discover.
 	mux.HandleFunc("/discover", ota.DiscoverHandler(ota.Config{
@@ -164,7 +186,8 @@ func main() {
 	logger.Info("timezone configured", "tz", *timezone)
 
 	sessionHandler := session.Handler(session.Config{
-		TTSAudio:         protocol.AudioParams{SampleRate: 24000, FrameDuration: 60},
+		TTSAudio:         protocol.AudioParams{SampleRate: *ttsSampleRate, FrameDuration: 60},
+		TTSTailPadMS:     *ttsTailPadMS,
 		HandshakeTimeout: 8 * time.Second,
 		ReadIdleTimeout:  120 * time.Second,
 		Kokoro:           kokoro,

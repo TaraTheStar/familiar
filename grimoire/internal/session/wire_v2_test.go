@@ -16,7 +16,7 @@ import (
 )
 
 func discardV2Out(initialCredit int) *v2Out {
-	return newV2Out(nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), initialCredit)
+	return newV2Out(nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), initialCredit, 0)
 }
 
 // TestV2CreditBackpressure proves the flow-control gate: once the initial

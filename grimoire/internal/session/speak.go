@@ -5,7 +5,11 @@ package session
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
+
+	"github.com/TaraTheStar/familiar/grimoire/internal/audio"
+	"github.com/TaraTheStar/familiar/grimoire/internal/tts"
 )
 
 // speakSentence synthesizes one sentence via Kokoro and streams it into the
@@ -30,10 +34,20 @@ func (s *Session) speakSentence(ctx context.Context, text string) error {
 	}
 	defer pcm.Close()
 
+	// Kokoro only emits 24kHz. When we dictate a lower TTS rate to the device
+	// (so it plays directly with no on-device resample), downsample here on the
+	// server — far cheaper than on the ESP32's audio core, where it was
+	// competing with wakenet + AEC during playback and starving wake-word
+	// detection (which broke barge-in).
+	var src io.Reader = pcm
+	if s.cfg.TTSAudio.SampleRate != tts.KokoroSampleRate {
+		src = audio.NewResampleReader(pcm, tts.KokoroSampleRate, s.cfg.TTSAudio.SampleRate)
+	}
+
 	if err := s.out.Caption(ctx, text); err != nil {
 		return fmt.Errorf("caption: %w", err)
 	}
-	if err := s.out.SpeakPCM(ctx, pcm); err != nil {
+	if err := s.out.SpeakPCM(ctx, src); err != nil {
 		return fmt.Errorf("speak pcm: %w", err)
 	}
 	log.Info("speak segment end")
