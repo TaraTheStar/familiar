@@ -35,7 +35,7 @@ import (
 func main() {
 	var (
 		addr           = flag.String("addr", ":9098", "listen address (host:port)")
-		wsURL          = flag.String("ws-url", "", "WebSocket URL to advertise to devices (e.g. ws://192.0.2.10:9098/xiaozhi/v1/)")
+		wsURL          = flag.String("ws-url", "", "WebSocket URL to advertise to devices (e.g. ws://192.0.2.10:9098/xiaozhi/)")
 		fwVer          = flag.String("firmware-version", "1.3.1", "firmware version echoed in /ota (set to device's current to suppress OTA)")
 		logLevel       = flag.String("log-level", "info", "debug|info|warn|error")
 		kokoroURL      = flag.String("kokoro-url", "", "Kokoro fastapi base URL (e.g. http://kokoro:8880); empty disables TTS")
@@ -65,6 +65,12 @@ func main() {
 
 		timezone = flag.String("timezone", "UTC", "IANA timezone the get_current_time tool reports in (e.g. America/New_York)")
 
+		// Protocol v2 audio flow control: the server→device send budget, in
+		// 60ms Opus frames, advertised in the v2 hello. Tunable so the credit
+		// window can be matched to a real device's decoder buffer without a
+		// rebuild (v1 ignores it). 0 = built-in default (40 frames ≈ 2.4s).
+		audioCreditInitial = flag.Int("v2-audio-credit", 0, "Protocol v2: initial server→device audio credit in 60ms frames (0=default 40)")
+
 		// Leading wake-beep removal (the chime bleeds into the mic with no AEC).
 		beepTrimMaxMS     = flag.Int("asr-beep-trim-ms", 600, "ASR: scan this many leading ms for the wake beep and trim it before transcription (0 disables)")
 		beepTrimThreshold = flag.Float64("asr-beep-threshold", 0, "ASR: mean-abs amplitude separating the beep from speech (0=default 2000)")
@@ -77,7 +83,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	if *wsURL == "" {
-		logger.Error("-ws-url is required (e.g. ws://192.0.2.10:9098/xiaozhi/v1/)")
+		logger.Error("-ws-url is required (e.g. ws://192.0.2.10:9098/xiaozhi/)")
 		os.Exit(2)
 	}
 
@@ -95,6 +101,12 @@ func main() {
 	// Mount /ota/ too so either discovery path works without a reflash.
 	mux.HandleFunc("/xiaozhi/ota/", otaHandler)
 	mux.HandleFunc("/ota/", otaHandler)
+	// Protocol v2 discovery (PROTOCOL_V2 §2.1): the lean {ws_url, firmware?}
+	// shape. v1 firmware keeps using /ota; v2 firmware uses /discover.
+	mux.HandleFunc("/discover", ota.DiscoverHandler(ota.Config{
+		WebSocketURL:    *wsURL,
+		FirmwareVersion: *fwVer,
+	}, logger.With("component", "discover")))
 
 	var kokoro *tts.KokoroClient
 	if *kokoroURL != "" {
@@ -151,7 +163,7 @@ func main() {
 	}
 	logger.Info("timezone configured", "tz", *timezone)
 
-	mux.HandleFunc("/xiaozhi/v1/", session.Handler(session.Config{
+	sessionHandler := session.Handler(session.Config{
 		TTSAudio:         protocol.AudioParams{SampleRate: 24000, FrameDuration: 60},
 		HandshakeTimeout: 8 * time.Second,
 		ReadIdleTimeout:  120 * time.Second,
@@ -173,9 +185,16 @@ func main() {
 			MaxScanMS: *beepTrimMaxMS,
 			Threshold: *beepTrimThreshold,
 		},
-		TimeLocation: timeLocation,
-		Logger:       logger.With("component", "session"),
-	}))
+		AudioCreditInitial: *audioCreditInitial,
+		TimeLocation:       timeLocation,
+		Logger:             logger.With("component", "session"),
+	})
+	// The session is dispatched by the Protocol-Version header, not the path, so
+	// both v1 and v2 are served on either mount. /xiaozhi/ is the version-neutral
+	// canonical path (advertised to v2 devices); /xiaozhi/v1/ stays mounted for
+	// devices that cached it.
+	mux.HandleFunc("/xiaozhi/", sessionHandler)
+	mux.HandleFunc("/xiaozhi/v1/", sessionHandler)
 
 	// Vision callback: device POSTs camera captures here when the LLM
 	// calls self.camera.take_photo. Requires a multimodal LLM (we reuse

@@ -97,3 +97,52 @@ func Handler(cfg Config, logger *slog.Logger) http.HandlerFunc {
 // nowDefault is replaced with time.Now().UnixMilli() inside the function
 // when cfg.NowMillis is nil; this var exists so tests can avoid time.
 var nowDefault int64 = 0
+
+// DiscoverResponse is the Protocol v2 discovery payload (PROTOCOL_V2 §2.1). It
+// is deliberately leaner than the v1 OTA response: no server_time (folded into
+// the WS hello), no activation/mqtt. Just where to connect and an optional
+// firmware update.
+type DiscoverResponse struct {
+	WSURL    string            `json:"ws_url"`
+	Firmware *DiscoverFirmware `json:"firmware,omitempty"`
+}
+
+// DiscoverFirmware names an available firmware image; the device upgrades only
+// if Version is newer than what it runs.
+type DiscoverFirmware struct {
+	Version string `json:"version"`
+	URL     string `json:"url,omitempty"`
+}
+
+// DiscoverHandler serves the v2 `/discover` endpoint. It reuses the OTA Config
+// (WebSocketURL + firmware fields) but emits the v2 shape. Time and token are
+// not included — v2 carries the clock in the WS hello and the token in the
+// upgrade headers. Firmware is advertised only when a URL is configured.
+func DiscoverHandler(cfg Config, logger *slog.Logger) http.HandlerFunc {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.Body != nil {
+			_, _ = io.Copy(io.Discard, r.Body)
+			_ = r.Body.Close()
+		}
+
+		resp := DiscoverResponse{WSURL: cfg.WebSocketURL}
+		if cfg.FirmwareURL != "" {
+			resp.Firmware = &DiscoverFirmware{Version: cfg.FirmwareVersion, URL: cfg.FirmwareURL}
+		}
+
+		logger.Info("v2 discovery",
+			"remote", r.RemoteAddr,
+			"device_id", r.Header.Get("Device-Id"),
+			"client_id", r.Header.Get("Client-Id"))
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
