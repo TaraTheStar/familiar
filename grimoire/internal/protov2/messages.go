@@ -195,12 +195,14 @@ type AudioCancel struct {
 }
 
 // Caption is display text for an utterance (§4.4). Text is cumulative — the
-// full caption so far, displayed verbatim — and the last caption for an
-// utterance carries Final=true.
+// full caption so far, displayed verbatim. The terminal caption for an utterance
+// carries Final=true and OMITS Text (a pure completion marker): the device keeps
+// the last text it displayed. Non-terminal captions always carry Text, so the
+// omitempty only ever elides the terminal marker's empty string.
 type Caption struct {
 	Type        string `json:"type"` // "caption"
 	UtteranceID int    `json:"utterance_id"`
-	Text        string `json:"text"`
+	Text        string `json:"text,omitempty"`
 	Final       bool   `json:"final"`
 }
 

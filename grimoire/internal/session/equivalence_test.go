@@ -77,9 +77,13 @@ func parseV2Turn(frames []string) semanticTurn {
 		case "display":
 			st.emotions = append(st.emotions, f.Emotion)
 		case "caption":
-			if f.Final {
+			// Non-terminal captions carry the cumulative text (one per sentence);
+			// the terminal one is Final=true with no text. The complete text is
+			// therefore the last non-empty caption seen.
+			if f.Text != "" {
 				st.completeText = f.Text
-			} else {
+			}
+			if !f.Final {
 				st.sentenceN++
 			}
 		}

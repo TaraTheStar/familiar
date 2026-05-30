@@ -114,7 +114,7 @@ func recordSessionV2(t *testing.T, cfg Config, flow func(t *testing.T, ctx conte
 			In:  protov2.AudioStream{Codec: "opus", Rate: 16000, Channels: 1, FrameMS: 60},
 			Out: protov2.AudioStream{Codec: "opus", Rate: 24000, Channels: 1, FrameMS: 60},
 		},
-		Features: []string{"mcp"},
+		Features: []string{"tools"},
 	}))
 
 	flowDone := make(chan struct{})

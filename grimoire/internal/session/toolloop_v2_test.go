@@ -120,7 +120,7 @@ func TestFullToolLoopV2(t *testing.T) {
 			In:  protov2.AudioStream{Codec: "opus", Rate: 16000, Channels: 1, FrameMS: 60},
 			Out: protov2.AudioStream{Codec: "opus", Rate: 24000, Channels: 1, FrameMS: 60},
 		},
-		Features: []string{"mcp"},
+		Features: []string{"tools"},
 	}))
 	mustReadText(t, ctx, conn) // server hello
 
@@ -150,9 +150,10 @@ func TestFullToolLoopV2(t *testing.T) {
 	transcriptSeen := false
 	toolCallSeen := false
 	gotCaption := ""
+	captionDone := false
 	deadline := time.Now().Add(8 * time.Second)
 
-	for time.Now().Before(deadline) && gotCaption == "" {
+	for time.Now().Before(deadline) && !captionDone {
 		mt, data, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("Read: %v", err)
@@ -190,8 +191,13 @@ func TestFullToolLoopV2(t *testing.T) {
 		case "caption":
 			var cap protov2.Caption
 			_ = json.Unmarshal(data, &cap)
-			if cap.Final {
+			// Cumulative text rides the non-terminal captions; the terminal one
+			// (Final=true) carries no text and just marks completion (§4.4).
+			if cap.Text != "" {
 				gotCaption = cap.Text
+			}
+			if cap.Final {
+				captionDone = true
 			}
 		}
 	}

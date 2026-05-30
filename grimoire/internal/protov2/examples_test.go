@@ -69,7 +69,7 @@ func exemplars() []exemplar {
 		{"audio_end", AudioEnd{Type: "audio_end", UtteranceID: 42}, false},
 		{"audio_cancel", AudioCancel{Type: "audio_cancel", UtteranceID: 42}, false},
 		{"caption", Caption{Type: "caption", UtteranceID: 42, Text: "Hi there!", Final: false}, false},
-		{"caption_final", Caption{Type: "caption", UtteranceID: 42, Text: "Hi there! How can I help?", Final: true}, false},
+		{"caption_final", Caption{Type: "caption", UtteranceID: 42, Final: true}, false}, // terminal marker: no text (§4.4)
 		{"display", Display{Type: "display", Emotion: "happy", Status: "speaking"}, false},
 		{"alert", Alert{Type: "alert", Title: "Battery low", Message: "Please charge", Emotion: "sad", Sound: "vibration"}, false},
 		{"system", System{Type: "system", Command: "reboot"}, false},

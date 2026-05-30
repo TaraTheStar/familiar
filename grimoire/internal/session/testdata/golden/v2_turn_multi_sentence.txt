@@ -12,6 +12,6 @@
 {"type":"caption","utterance_id":1,"text":"Sentence one. Sentence two! And a final fragment","final":false}
 <binary opus 68 bytes>
 <binary opus 68 bytes>
-{"type":"caption","utterance_id":1,"text":"Sentence one. Sentence two! And a final fragment","final":true}
+{"type":"caption","utterance_id":1,"final":true}
 {"type":"audio_end","utterance_id":1}
 {"type":"display","emotion":"neutral","status":"listening"}

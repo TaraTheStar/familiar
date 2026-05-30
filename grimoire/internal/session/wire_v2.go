@@ -201,11 +201,14 @@ func (o *v2Out) SpeakEnd(ctx context.Context) error {
 		return nil
 	}
 
+	// Terminal caption marker: Final=true with no Text. The full cumulative text
+	// already went out on the last Final=false caption (in sync with the audio);
+	// repeating it here would just duplicate the final sentence. The device keeps
+	// the displayed text and treats Final=true as "caption complete" (§4.4).
 	if len(o.segs) > 0 {
 		if err := writeJSON(sendCtx, o.conn, protov2.Caption{
 			Type:        "caption",
 			UtteranceID: o.utterance,
-			Text:        strings.Join(o.segs, " "),
 			Final:       true,
 		}); err != nil {
 			return fmt.Errorf("send final caption: %w", err)
