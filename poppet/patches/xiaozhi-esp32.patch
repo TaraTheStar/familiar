@@ -1,5 +1,5 @@
 diff --git c/main/application.cc w/main/application.cc
-index d69d43d..c090681 100644
+index d69d43d..02aea21 100644
 --- c/main/application.cc
 +++ w/main/application.cc
 @@ -55,9 +55,46 @@ Application::~Application() {
@@ -80,50 +80,198 @@ index d69d43d..c090681 100644
          }
      }
  }
-@@ -526,12 +581,15 @@ void Application::InitializeProtocol() {
-             if (strcmp(state->valuestring, "start") == 0) {
-                 Schedule([this]() {
-                     aborted_ = false;
+@@ -500,6 +555,18 @@ void Application::InitializeProtocol() {
+             audio_service_.PushPacketToDecodeQueue(std::move(packet));
+         }
+     });
++
++    // Protocol v2 audio flow control (§5): grant the server more send credit as
++    // decoded TTS frames drain off the decode queue. The hook fires on the opus
++    // codec task, so marshal onto the main task (via Schedule) to serialize the
++    // audio_credit send with every other WS send — Protocol batches the grants.
++    audio_service_.OnDecodeFrameConsumed([this]() {
++        Schedule([this]() {
++            if (protocol_) {
++                protocol_->NotifyAudioFrameConsumed();
++            }
++        });
++    });
+     
+     protocol_->OnAudioChannelOpened([this, codec, &board]() {
+         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+@@ -519,53 +586,94 @@ void Application::InitializeProtocol() {
+     });
+     
+     protocol_->OnIncomingJson([this, display](const cJSON* root) {
+-        // Parse JSON data
++        // Protocol v2 dispatcher (docs/PROTOCOL_V2.md §4). The speaking state is
++        // now driven by audio_begin/audio_end (§4.4), decoupled from captions —
++        // this is the real fix for the v1 clipped-second-sentence bug.
+         auto type = cJSON_GetObjectItem(root, "type");
+-        if (strcmp(type->valuestring, "tts") == 0) {
+-            auto state = cJSON_GetObjectItem(root, "state");
+-            if (strcmp(state->valuestring, "start") == 0) {
+-                Schedule([this]() {
+-                    aborted_ = false;
 -                    SetDeviceState(kDeviceStateSpeaking);
-                 });
-             } else if (strcmp(state->valuestring, "stop") == 0) {
-                 Schedule([this]() {
-                     if (GetDeviceState() == kDeviceStateSpeaking) {
+-                });
+-            } else if (strcmp(state->valuestring, "stop") == 0) {
+-                Schedule([this]() {
+-                    if (GetDeviceState() == kDeviceStateSpeaking) {
 -                        if (listening_mode_ == kListeningModeManualStop) {
-+                        // Privacy gate (sleep): after a farewell finishes, go
-+                        // back to Idle (mic off), NOT Listening — the gate
-+                        // would refuse Listening anyway, leaving us stuck in
-+                        // Speaking.
-+                        if (listening_mode_ == kListeningModeManualStop || privacy_gate_) {
-                             SetDeviceState(kDeviceStateIdle);
-                         } else {
-                             SetDeviceState(kDeviceStateListening);
-@@ -542,7 +600,10 @@ void Application::InitializeProtocol() {
-                 auto text = cJSON_GetObjectItem(root, "text");
-                 if (cJSON_IsString(text)) {
-                     ESP_LOGI(TAG, "<< %s", text->valuestring);
+-                            SetDeviceState(kDeviceStateIdle);
+-                        } else {
+-                            SetDeviceState(kDeviceStateListening);
+-                        }
+-                    }
+-                });
+-            } else if (strcmp(state->valuestring, "sentence_start") == 0) {
+-                auto text = cJSON_GetObjectItem(root, "text");
+-                if (cJSON_IsString(text)) {
+-                    ESP_LOGI(TAG, "<< %s", text->valuestring);
 -                    Schedule([display, message = std::string(text->valuestring)]() {
-+                    Schedule([this, display, message = std::string(text->valuestring)]() {
-+                        if (GetDeviceState() != kDeviceStateSpeaking) {
-+                            SetDeviceState(kDeviceStateSpeaking);
-+                        }
-                         display->SetChatMessage("assistant", message.c_str());
-                     });
-                 }
-@@ -553,10 +614,12 @@ void Application::InitializeProtocol() {
+-                        display->SetChatMessage("assistant", message.c_str());
+-                    });
+-                }
+-            }
+-        } else if (strcmp(type->valuestring, "stt") == 0) {
++        if (!cJSON_IsString(type)) {
++            ESP_LOGW(TAG, "Incoming frame missing 'type'");
++            return;
++        }
++
++        if (strcmp(type->valuestring, "transcript") == 0) {
++            // ASR result (§4.3): display-only, drives the thinking emotion.
+             auto text = cJSON_GetObjectItem(root, "text");
+             if (cJSON_IsString(text)) {
                  ESP_LOGI(TAG, ">> %s", text->valuestring);
                  Schedule([display, message = std::string(text->valuestring)]() {
                      display->SetChatMessage("user", message.c_str());
 +                    display->SetEmotion("thinking");
                  });
              }
-         } else if (strcmp(type->valuestring, "llm") == 0) {
+-        } else if (strcmp(type->valuestring, "llm") == 0) {
++        } else if (strcmp(type->valuestring, "display") == 0) {
++            // Avatar display (§4.5). Apply emotion; status is advisory UI in v2
++            // (device speaking/listening state is driven by audio_begin/end).
              auto emotion = cJSON_GetObjectItem(root, "emotion");
-+            ESP_LOGW(TAG, "LLM frame received, emotion=%s", cJSON_IsString(emotion) ? emotion->valuestring : "null");
              if (cJSON_IsString(emotion)) {
                  Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
                      display->SetEmotion(emotion_str.c_str());
-@@ -610,33 +673,36 @@ void Application::InitializeProtocol() {
+                 });
+             }
+-        } else if (strcmp(type->valuestring, "mcp") == 0) {
+-            auto payload = cJSON_GetObjectItem(root, "payload");
+-            if (cJSON_IsObject(payload)) {
+-                McpServer::GetInstance().ParseMessage(payload);
++        } else if (strcmp(type->valuestring, "audio_begin") == 0) {
++            // Server is about to stream TTS Opus frames (§4.4): enter Speaking
++            // so OnIncomingAudio enqueues the frames that follow.
++            Schedule([this]() {
++                aborted_ = false;
++                if (GetDeviceState() != kDeviceStateSpeaking) {
++                    SetDeviceState(kDeviceStateSpeaking);
++                }
++            });
++        } else if (strcmp(type->valuestring, "audio_end") == 0) {
++            // TTS stream finished normally (§4.4): leave Speaking.
++            Schedule([this]() {
++                if (GetDeviceState() == kDeviceStateSpeaking) {
++                    // Privacy gate (sleep): after a farewell finishes, go back
++                    // to Idle (mic off), NOT Listening — the gate would refuse
++                    // Listening anyway, leaving us stuck in Speaking.
++                    if (listening_mode_ == kListeningModeManualStop || privacy_gate_) {
++                        SetDeviceState(kDeviceStateIdle);
++                    } else {
++                        SetDeviceState(kDeviceStateListening);
++                    }
++                }
++            });
++        } else if (strcmp(type->valuestring, "audio_cancel") == 0) {
++            // Server cancelled the in-flight reply (barge-in confirmation,
++            // §4.4): flush queued audio so nothing stale plays, then leave
++            // Speaking.
++            Schedule([this]() {
++                audio_service_.ResetDecoder();
++                if (GetDeviceState() == kDeviceStateSpeaking) {
++                    if (listening_mode_ == kListeningModeManualStop || privacy_gate_) {
++                        SetDeviceState(kDeviceStateIdle);
++                    } else {
++                        SetDeviceState(kDeviceStateListening);
++                    }
++                }
++            });
++        } else if (strcmp(type->valuestring, "caption") == 0) {
++            // Chat text for the current utterance (§4.4). Cumulative text rides
++            // the non-terminal captions; the terminal one (final:true) omits
++            // text and is a pure completion marker — nothing to display.
++            auto text = cJSON_GetObjectItem(root, "text");
++            if (cJSON_IsString(text) && text->valuestring[0] != '\0') {
++                ESP_LOGI(TAG, "<< %s", text->valuestring);
++                Schedule([this, display, message = std::string(text->valuestring)]() {
++                    if (GetDeviceState() != kDeviceStateSpeaking) {
++                        SetDeviceState(kDeviceStateSpeaking);
++                    }
++                    display->SetChatMessage("assistant", message.c_str());
++                });
++            }
++        } else if (strcmp(type->valuestring, "alert") == 0) {
++            // Full-screen popup (§4.6): title/message/emotion required.
++            auto title = cJSON_GetObjectItem(root, "title");
++            auto message = cJSON_GetObjectItem(root, "message");
++            auto emotion = cJSON_GetObjectItem(root, "emotion");
++            if (cJSON_IsString(title) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
++                Alert(title->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::OGG_VIBRATION);
++            } else {
++                ESP_LOGW(TAG, "Alert requires title, message and emotion");
+             }
+         } else if (strcmp(type->valuestring, "system") == 0) {
+             auto command = cJSON_GetObjectItem(root, "command");
+@@ -580,27 +688,23 @@ void Application::InitializeProtocol() {
+                     ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
+                 }
+             }
+-        } else if (strcmp(type->valuestring, "alert") == 0) {
+-            auto status = cJSON_GetObjectItem(root, "status");
++        } else if (strcmp(type->valuestring, "tool_list") == 0) {
++            // First-class tool discovery (§6.2) — bridge to the MCP registry.
++            McpServer::GetInstance().HandleToolList(root);
++        } else if (strcmp(type->valuestring, "tool_call") == 0) {
++            // First-class tool invocation (§6.3) — bridge to the MCP registry.
++            McpServer::GetInstance().HandleToolCall(root);
++        } else if (strcmp(type->valuestring, "goodbye") == 0) {
++            // Advisory only (§4.10): the WS close frame does the teardown.
++            auto reason = cJSON_GetObjectItem(root, "reason");
++            ESP_LOGI(TAG, "Goodbye: %s", cJSON_IsString(reason) ? reason->valuestring : "");
++        } else if (strcmp(type->valuestring, "error") == 0) {
++            // Log + degrade; never fatal (§9). Tolerate unknown codes.
++            auto code = cJSON_GetObjectItem(root, "code");
+             auto message = cJSON_GetObjectItem(root, "message");
+-            auto emotion = cJSON_GetObjectItem(root, "emotion");
+-            if (cJSON_IsString(status) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
+-                Alert(status->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::OGG_VIBRATION);
+-            } else {
+-                ESP_LOGW(TAG, "Alert command requires status, message and emotion");
+-            }
+-#if CONFIG_RECEIVE_CUSTOM_MESSAGE
+-        } else if (strcmp(type->valuestring, "custom") == 0) {
+-            auto payload = cJSON_GetObjectItem(root, "payload");
+-            ESP_LOGI(TAG, "Received custom message: %s", cJSON_PrintUnformatted(root));
+-            if (cJSON_IsObject(payload)) {
+-                Schedule([this, display, payload_str = std::string(cJSON_PrintUnformatted(payload))]() {
+-                    display->SetChatMessage("system", payload_str.c_str());
+-                });
+-            } else {
+-                ESP_LOGW(TAG, "Invalid custom message format: missing payload");
+-            }
+-#endif
++            ESP_LOGW(TAG, "Server error %s: %s",
++                     cJSON_IsString(code) ? code->valuestring : "?",
++                     cJSON_IsString(message) ? message->valuestring : "");
+         } else {
+             ESP_LOGW(TAG, "Unknown message type: %s", type->valuestring);
+         }
+@@ -610,33 +714,36 @@ void Application::InitializeProtocol() {
  }
  
  void Application::ShowActivationCode(const std::string& code, const std::string& message) {
@@ -187,7 +335,7 @@ index d69d43d..c090681 100644
  }
  
  void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
-@@ -711,13 +777,23 @@ void Application::HandleToggleChatEvent() {
+@@ -711,13 +818,23 @@ void Application::HandleToggleChatEvent() {
  }
  
  void Application::ContinueOpenAudioChannel(ListeningMode mode) {
@@ -213,7 +361,7 @@ index d69d43d..c090681 100644
              return;
          }
      }
-@@ -786,17 +862,18 @@ void Application::HandleWakeWordDetectedEvent() {
+@@ -786,17 +903,18 @@ void Application::HandleWakeWordDetectedEvent() {
          audio_service_.EncodeWakeWord();
          auto wake_word = audio_service_.GetLastWakeWord();
  
@@ -243,7 +391,7 @@ index d69d43d..c090681 100644
      } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
          AbortSpeaking(kAbortReasonWakeWordDetected);
          // Clear send queue to avoid sending residues to server
-@@ -864,6 +941,15 @@ void Application::HandleStateChangedEvent() {
+@@ -864,6 +982,15 @@ void Application::HandleStateChangedEvent() {
      switch (new_state) {
          case kDeviceStateUnknown:
          case kDeviceStateIdle:
@@ -259,7 +407,7 @@ index d69d43d..c090681 100644
              display->SetStatus(Lang::Strings::STANDBY);
              display->ClearChatMessages();  // Clear messages first
              display->SetEmotion("neutral"); // Then set emotion (wechat mode checks child count)
-@@ -911,8 +997,10 @@ void Application::HandleStateChangedEvent() {
+@@ -911,8 +1038,10 @@ void Application::HandleStateChangedEvent() {
  
              if (listening_mode_ != kListeningModeRealtime) {
                  audio_service_.EnableVoiceProcessing(false);
@@ -272,10 +420,22 @@ index d69d43d..c090681 100644
              }
              audio_service_.ResetDecoder();
              break;
-@@ -1075,6 +1163,28 @@ void Application::SendMcpMessage(const std::string& payload) {
-     });
+@@ -1066,12 +1195,34 @@ bool Application::CanEnterSleepMode() {
+     return true;
  }
  
+-void Application::SendMcpMessage(const std::string& payload) {
++void Application::SendToolMessage(const std::string& frame) {
+     // Always schedule to run in main task for thread safety
+-    Schedule([this, payload = std::move(payload)]() {
++    Schedule([this, frame = std::move(frame)]() {
+         if (protocol_) {
+-            protocol_->SendMcpMessage(payload);
++            protocol_->SendToolMessage(frame);
++        }
++    });
++}
++
 +// Dotty: ambient perception event emit. Thread-safe — Schedule pushes
 +// the actual SendEvent onto the main task so callers (face_tracking
 +// modifier on Core 0, sound localizer task) don't need to know about
@@ -293,16 +453,13 @@ index d69d43d..c090681 100644
 +                ESP_LOGW(TAG, "SendEvent: failed to open WS for %s", name.c_str());
 +                return;
 +            }
-+        }
+         }
 +        protocol_->SendEvent(name, data_json);
-+    });
-+}
-+
- void Application::SetAecMode(AecMode mode) {
-     aec_mode_ = mode;
-     Schedule([this]() {
+     });
+ }
+ 
 diff --git c/main/application.h w/main/application.h
-index 7ca7af4..90721d9 100644
+index 7ca7af4..e1d271b 100644
 --- c/main/application.h
 +++ w/main/application.h
 @@ -72,6 +72,11 @@ public:
@@ -317,17 +474,21 @@ index 7ca7af4..90721d9 100644
      /**
       * Schedule a callback to be executed in the main task
       */
-@@ -108,6 +113,9 @@ public:
+@@ -107,7 +112,12 @@ public:
+     void WakeWordInvoke(const std::string& wake_word);
      bool UpgradeFirmware(const std::string& url, const std::string& version = "");
      bool CanEnterSleepMode();
-     void SendMcpMessage(const std::string& payload);
+-    void SendMcpMessage(const std::string& payload);
++    // Protocol v2: forward a complete first-class tool frame (built by McpServer)
++    // to the transport. Replaces v1's SendMcpMessage.
++    void SendToolMessage(const std::string& frame);
 +    // Dotty: ambient perception event emit (face_detected / face_lost / sound_event).
 +    // Thread-safe (Schedule wrapped); fire-and-forget.
 +    void SendEvent(const std::string& name, const std::string& data_json);
      void SetAecMode(AecMode mode);
      AecMode GetAecMode() const { return aec_mode_; }
      void PlaySound(const std::string_view& sound);
-@@ -140,6 +148,7 @@ private:
+@@ -140,6 +150,7 @@ private:
      bool aborted_ = false;
      bool assets_version_checked_ = false;
      bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
@@ -515,7 +676,7 @@ index 3692e0c..7bfbc5c 100644
      // Strategy instance
      std::unique_ptr<AssetStrategy> strategy_;
 diff --git c/main/audio/audio_service.cc w/main/audio/audio_service.cc
-index 350ac58..ab2912d 100644
+index 350ac58..ba416b2 100644
 --- c/main/audio/audio_service.cc
 +++ w/main/audio/audio_service.cc
 @@ -158,12 +158,13 @@ void AudioService::Start() {
@@ -548,8 +709,21 @@ index 350ac58..ab2912d 100644
                  if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
                      wake_word_->Feed(data);
                  }
+@@ -343,6 +350,12 @@ void AudioService::OpusCodecTask() {
+             audio_queue_cv_.notify_all();
+             lock.unlock();
+ 
++            // Protocol v2 flow control (§5): a server→device frame just left the
++            // decode queue — credit it back so the server's send budget refills.
++            if (decode_frame_consumed_callback_) {
++                decode_frame_consumed_callback_();
++            }
++
+             auto task = std::make_unique<AudioTask>();
+             task->type = kAudioTaskTypeDecodeToPlaybackQueue;
+             task->timestamp = packet->timestamp;
 diff --git c/main/audio/audio_service.h w/main/audio/audio_service.h
-index 99db546..4e0b5dc 100644
+index 99db546..1ddd404 100644
 --- c/main/audio/audio_service.h
 +++ w/main/audio/audio_service.h
 @@ -38,7 +38,7 @@
@@ -561,7 +735,7 @@ index 99db546..4e0b5dc 100644
  #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
  #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
  #define AUDIO_TESTING_MAX_DURATION_MS 10000
-@@ -127,6 +127,14 @@ public:
+@@ -127,6 +127,22 @@ public:
  
      void SetCallbacks(AudioServiceCallbacks& callbacks);
  
@@ -573,15 +747,25 @@ index 99db546..4e0b5dc 100644
 +        stereo_frame_callback_ = std::move(cb);
 +    }
 +
++    // Protocol v2 audio flow control (§5): fires each time a decoded TTS packet
++    // is consumed off the decode queue, so the protocol layer can grant the
++    // server more send credit. Runs on the opus codec task; the subscriber must
++    // be cheap and thread-aware (it sends a WS frame in batches).
++    void OnDecodeFrameConsumed(std::function<void()> cb) {
++        decode_frame_consumed_callback_ = std::move(cb);
++    }
++
      bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
      std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
      void PlaySound(const std::string_view& sound);
-@@ -137,6 +145,8 @@ public:
+@@ -137,6 +153,10 @@ public:
  private:
      AudioCodec* codec_ = nullptr;
      AudioServiceCallbacks callbacks_;
 +    // Dotty: stereo frame callback for ambient sound localization.
 +    std::function<void(const std::vector<int16_t>&)> stereo_frame_callback_;
++    // Protocol v2 flow control: decode-queue consumption callback.
++    std::function<void()> decode_frame_consumed_callback_;
      std::unique_ptr<AudioProcessor> audio_processor_;
      std::unique_ptr<WakeWord> wake_word_;
      std::unique_ptr<AudioDebugger> audio_debugger_;
@@ -686,36 +870,548 @@ index 835997d..1061416 100644
 +    }
  }
 \ No newline at end of file
+diff --git c/main/mcp_server.cc w/main/mcp_server.cc
+index 7cd7ba0..06b7b3e 100644
+--- c/main/mcp_server.cc
++++ w/main/mcp_server.cc
+@@ -321,202 +321,87 @@ void McpServer::AddUserOnlyTool(const std::string& name, const std::string& desc
+     AddTool(tool);
+ }
+ 
+-void McpServer::ParseMessage(const std::string& message) {
+-    cJSON* json = cJSON_Parse(message.c_str());
+-    if (json == nullptr) {
+-        ESP_LOGE(TAG, "Failed to parse MCP message: %s", message.c_str());
+-        return;
+-    }
+-    ParseMessage(json);
+-    cJSON_Delete(json);
+-}
+-
+-void McpServer::ParseCapabilities(const cJSON* capabilities) {
+-    auto vision = cJSON_GetObjectItem(capabilities, "vision");
+-    if (cJSON_IsObject(vision)) {
+-        auto url = cJSON_GetObjectItem(vision, "url");
+-        auto token = cJSON_GetObjectItem(vision, "token");
+-        if (cJSON_IsString(url)) {
+-            auto camera = Board::GetInstance().GetCamera();
+-            if (camera) {
+-                std::string url_str = std::string(url->valuestring);
+-                std::string token_str;
+-                if (cJSON_IsString(token)) {
+-                    token_str = std::string(token->valuestring);
+-                }
+-                camera->SetExplainUrl(url_str, token_str);
+-            }
+-        }
++// ---------------------------------------------------------------------------
++// Protocol v2 tool bridge (docs/PROTOCOL_V2.md §6).
++//
++// v2 drops MCP's JSON-RPC envelope: tool_list and tool_call are first-class WS
++// frames correlated by `id`, with v2-shaped descriptors (args_schema +
++// permission) and bare-JSON results. The registry, pagination, arg coercion,
++// and tool callbacks below are reused verbatim from the MCP model — only the
++// wire shape changes. Frames are sent via Application::SendToolMessage.
++// ---------------------------------------------------------------------------
++
++// HandleToolList answers a v2 tool_list discovery request (§6.2). Only public
++// tools are exposed (user_only stays hidden, as in v1's default list);
++// pagination preserves the 8000-byte payload budget.
++void McpServer::HandleToolList(const cJSON* root) {
++    auto id_item = cJSON_GetObjectItem(root, "id");
++    int id = cJSON_IsNumber(id_item) ? id_item->valueint : 0;
++    std::string cursor;
++    auto cursor_item = cJSON_GetObjectItem(root, "cursor");
++    if (cJSON_IsString(cursor_item)) {
++        cursor = cursor_item->valuestring;
+     }
+-}
+ 
+-void McpServer::ParseMessage(const cJSON* json) {
+-    // Check JSONRPC version
+-    auto version = cJSON_GetObjectItem(json, "jsonrpc");
+-    if (version == nullptr || !cJSON_IsString(version) || strcmp(version->valuestring, "2.0") != 0) {
+-        ESP_LOGE(TAG, "Invalid JSONRPC version: %s", version ? version->valuestring : "null");
+-        return;
+-    }
+-    
+-    // Check method
+-    auto method = cJSON_GetObjectItem(json, "method");
+-    if (method == nullptr || !cJSON_IsString(method)) {
+-        ESP_LOGE(TAG, "Missing method");
+-        return;
+-    }
+-    
+-    auto method_str = std::string(method->valuestring);
+-    if (method_str.find("notifications") == 0) {
+-        return;
+-    }
+-    
+-    // Check params
+-    auto params = cJSON_GetObjectItem(json, "params");
+-    if (params != nullptr && !cJSON_IsObject(params)) {
+-        ESP_LOGE(TAG, "Invalid params for method: %s", method_str.c_str());
+-        return;
+-    }
+-
+-    auto id = cJSON_GetObjectItem(json, "id");
+-    if (id == nullptr || !cJSON_IsNumber(id)) {
+-        ESP_LOGE(TAG, "Invalid id for method: %s", method_str.c_str());
+-        return;
+-    }
+-    auto id_int = id->valueint;
+-    
+-    if (method_str == "initialize") {
+-        if (cJSON_IsObject(params)) {
+-            auto capabilities = cJSON_GetObjectItem(params, "capabilities");
+-            if (cJSON_IsObject(capabilities)) {
+-                ParseCapabilities(capabilities);
+-            }
+-        }
+-        auto app_desc = esp_app_get_description();
+-        std::string message = "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"" BOARD_NAME "\",\"version\":\"";
+-        message += app_desc->version;
+-        message += "\"}}";
+-        ReplyResult(id_int, message);
+-    } else if (method_str == "tools/list") {
+-        std::string cursor_str = "";
+-        bool list_user_only_tools = false;
+-        if (params != nullptr) {
+-            auto cursor = cJSON_GetObjectItem(params, "cursor");
+-            if (cJSON_IsString(cursor)) {
+-                cursor_str = std::string(cursor->valuestring);
+-            }
+-            auto with_user_tools = cJSON_GetObjectItem(params, "withUserTools");
+-            if (cJSON_IsBool(with_user_tools)) {
+-                list_user_only_tools = with_user_tools->valueint == 1;
+-            }
+-        }
+-        GetToolsList(id_int, cursor_str, list_user_only_tools);
+-    } else if (method_str == "tools/call") {
+-        if (!cJSON_IsObject(params)) {
+-            ESP_LOGE(TAG, "tools/call: Missing params");
+-            ReplyError(id_int, "Missing params");
+-            return;
+-        }
+-        auto tool_name = cJSON_GetObjectItem(params, "name");
+-        if (!cJSON_IsString(tool_name)) {
+-            ESP_LOGE(TAG, "tools/call: Missing name");
+-            ReplyError(id_int, "Missing name");
+-            return;
+-        }
+-        auto tool_arguments = cJSON_GetObjectItem(params, "arguments");
+-        if (tool_arguments != nullptr && !cJSON_IsObject(tool_arguments)) {
+-            ESP_LOGE(TAG, "tools/call: Invalid arguments");
+-            ReplyError(id_int, "Invalid arguments");
+-            return;
+-        }
+-        DoToolCall(id_int, std::string(tool_name->valuestring), tool_arguments);
+-    } else {
+-        ESP_LOGE(TAG, "Method not implemented: %s", method_str.c_str());
+-        ReplyError(id_int, "Method not implemented: " + method_str);
+-    }
+-}
+-
+-void McpServer::ReplyResult(int id, const std::string& result) {
+-    std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
+-    payload += std::to_string(id) + ",\"result\":";
+-    payload += result;
+-    payload += "}";
+-    Application::GetInstance().SendMcpMessage(payload);
+-}
+-
+-void McpServer::ReplyError(int id, const std::string& message) {
+-    std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
+-    payload += std::to_string(id);
+-    payload += ",\"error\":{\"message\":\"";
+-    payload += message;
+-    payload += "\"}}";
+-    Application::GetInstance().SendMcpMessage(payload);
+-}
+-
+-void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_only_tools) {
+     const int max_payload_size = 8000;
+-    std::string json = "{\"tools\":[";
+-    
++    std::string tools_json = "[";
+     bool found_cursor = cursor.empty();
+-    auto it = tools_.begin();
+     std::string next_cursor = "";
+-    
+-    while (it != tools_.end()) {
+-        // 如果我们还没有找到起始位置，继续搜索
++
++    for (auto it = tools_.begin(); it != tools_.end(); ++it) {
+         if (!found_cursor) {
+             if ((*it)->name() == cursor) {
+-                found_cursor = true;
++                found_cursor = true;  // include this tool and continue
+             } else {
+-                ++it;
+                 continue;
+             }
+         }
+-
+-        if (!list_user_only_tools && (*it)->user_only()) {
+-            ++it;
+-            continue;
++        if ((*it)->user_only()) {
++            continue;  // v2: only public tools are exposed to the server/LLM
+         }
+-        
+-        // 添加tool前检查大小
+-        std::string tool_json = (*it)->to_json() + ",";
+-        if (json.length() + tool_json.length() + 30 > max_payload_size) {
+-            // 如果添加这个tool会超出大小限制，设置next_cursor并退出循环
++        std::string tool_json = (*it)->to_json_v2() + ",";
++        if (tools_json.length() + tool_json.length() + 64 > (size_t)max_payload_size) {
+             next_cursor = (*it)->name();
+             break;
+         }
+-        
+-        json += tool_json;
+-        ++it;
++        tools_json += tool_json;
+     }
+-    
+-    if (json.back() == ',') {
+-        json.pop_back();
+-    }
+-    
+-    if (json.back() == '[' && !tools_.empty()) {
+-        // 如果没有添加任何tool，返回错误
+-        ESP_LOGE(TAG, "tools/list: Failed to add tool %s because of payload size limit", next_cursor.c_str());
+-        ReplyError(id, "Failed to add tool " + next_cursor + " because of payload size limit");
+-        return;
++    if (tools_json.back() == ',') {
++        tools_json.pop_back();
+     }
++    tools_json += "]";
+ 
+-    if (next_cursor.empty()) {
+-        json += "]}";
+-    } else {
+-        json += "],\"nextCursor\":\"" + next_cursor + "\"}";
++    std::string frame = "{\"type\":\"tool_list\",\"id\":" + std::to_string(id) +
++                        ",\"result\":{\"tools\":" + tools_json;
++    if (!next_cursor.empty()) {
++        frame += ",\"next_cursor\":\"" + next_cursor + "\"";
+     }
+-    
+-    ReplyResult(id, json);
++    frame += "}}";
++    Application::GetInstance().SendToolMessage(frame);
+ }
+ 
+-void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments) {
+-    auto tool_iter = std::find_if(tools_.begin(), tools_.end(), 
+-                                 [&tool_name](const McpTool* tool) { 
+-                                     return tool->name() == tool_name; 
+-                                 });
+-    
++// HandleToolCall executes a v2 tool_call (§6.3). Arguments are coerced into the
++// tool's PropertyList exactly as the v1 path did; the tool runs on the main
++// task (Schedule) and its bare return value becomes the v2 `result`.
++void McpServer::HandleToolCall(const cJSON* root) {
++    auto id_item = cJSON_GetObjectItem(root, "id");
++    int id = cJSON_IsNumber(id_item) ? id_item->valueint : 0;
++
++    auto name_item = cJSON_GetObjectItem(root, "name");
++    if (!cJSON_IsString(name_item)) {
++        ReplyToolError(id, "PROTOCOL_VIOLATION", "Missing tool name");
++        return;
++    }
++    std::string tool_name = name_item->valuestring;
++    auto tool_arguments = cJSON_GetObjectItem(root, "args");  // null or object
++
++    auto tool_iter = std::find_if(tools_.begin(), tools_.end(),
++                                  [&tool_name](const McpTool* tool) {
++                                      return tool->name() == tool_name;
++                                  });
+     if (tool_iter == tools_.end()) {
+-        ESP_LOGE(TAG, "tools/call: Unknown tool: %s", tool_name.c_str());
+-        ReplyError(id, "Unknown tool: " + tool_name);
++        ESP_LOGE(TAG, "tool_call: Unknown tool: %s", tool_name.c_str());
++        ReplyToolError(id, "TOOL_NOT_FOUND", "Unknown tool: " + tool_name);
+         return;
+     }
+ 
+@@ -537,27 +422,43 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
+                     found = true;
+                 }
+             }
+-
+             if (!argument.has_default_value() && !found) {
+-                ESP_LOGE(TAG, "tools/call: Missing valid argument: %s", argument.name().c_str());
+-                ReplyError(id, "Missing valid argument: " + argument.name());
++                ESP_LOGE(TAG, "tool_call: Missing valid argument: %s", argument.name().c_str());
++                ReplyToolError(id, "OUT_OF_RANGE", "Missing valid argument: " + argument.name());
+                 return;
+             }
+         }
+     } catch (const std::exception& e) {
+-        ESP_LOGE(TAG, "tools/call: %s", e.what());
+-        ReplyError(id, e.what());
++        ESP_LOGE(TAG, "tool_call: %s", e.what());
++        ReplyToolError(id, "OUT_OF_RANGE", e.what());
+         return;
+     }
+ 
+-    // Use main thread to call the tool
++    // Run the tool on the main task, then send the bare result as the v2 result.
+     auto& app = Application::GetInstance();
+     app.Schedule([this, id, tool_iter, arguments = std::move(arguments)]() {
+         try {
+-            ReplyResult(id, (*tool_iter)->Call(arguments));
++            std::string result = (*tool_iter)->CallV2(arguments);
++            std::string frame = "{\"type\":\"tool_call\",\"id\":" + std::to_string(id) +
++                                ",\"result\":" + result + "}";
++            Application::GetInstance().SendToolMessage(frame);
+         } catch (const std::exception& e) {
+-            ESP_LOGE(TAG, "tools/call: %s", e.what());
+-            ReplyError(id, e.what());
++            ESP_LOGE(TAG, "tool_call: %s", e.what());
++            ReplyToolError(id, "TOOL_FAILED", e.what());
+         }
+     });
+ }
++
++// ReplyToolError emits a v2 tool_call error response (§6.3, §9.3). The message
++// is JSON-escaped via cJSON so arbitrary exception text is safe on the wire.
++void McpServer::ReplyToolError(int id, const std::string& code, const std::string& message) {
++    cJSON* err = cJSON_CreateObject();
++    cJSON_AddStringToObject(err, "code", code.c_str());
++    cJSON_AddStringToObject(err, "message", message.c_str());
++    char* err_str = cJSON_PrintUnformatted(err);
++    std::string frame = "{\"type\":\"tool_call\",\"id\":" + std::to_string(id) +
++                        ",\"error\":" + (err_str ? err_str : "{}") + "}";
++    cJSON_free(err_str);
++    cJSON_Delete(err);
++    Application::GetInstance().SendToolMessage(frame);
++}
+diff --git c/main/mcp_server.h w/main/mcp_server.h
+index dacdd55..6ae09ef 100644
+--- c/main/mcp_server.h
++++ w/main/mcp_server.h
+@@ -309,6 +309,73 @@ public:
+         cJSON_Delete(result);
+         return result_str;
+     }
++
++    // Protocol v2 descriptor (PROTOCOL_V2 §6.1): flat {name, description,
++    // args_schema, permission}. args_schema is the same JSON Schema object v1's
++    // to_json() nests under "inputSchema"; permission replaces the MCP
++    // audience annotation.
++    std::string to_json_v2() const {
++        std::vector<std::string> required = properties_.GetRequired();
++
++        cJSON* json = cJSON_CreateObject();
++        cJSON_AddStringToObject(json, "name", name_.c_str());
++        cJSON_AddStringToObject(json, "description", description_.c_str());
++
++        cJSON* args_schema = cJSON_CreateObject();
++        cJSON_AddStringToObject(args_schema, "type", "object");
++        cJSON* properties = cJSON_Parse(properties_.to_json().c_str());
++        cJSON_AddItemToObject(args_schema, "properties", properties);
++        if (!required.empty()) {
++            cJSON* required_array = cJSON_CreateArray();
++            for (const auto& property : required) {
++                cJSON_AddItemToArray(required_array, cJSON_CreateString(property.c_str()));
++            }
++            cJSON_AddItemToObject(args_schema, "required", required_array);
++        }
++        cJSON_AddItemToObject(json, "args_schema", args_schema);
++
++        // Only public tools are listed in v2 (user_only stays hidden), so the
++        // exposed permission is always "public".
++        cJSON_AddStringToObject(json, "permission", "public");
++
++        char* json_str = cJSON_PrintUnformatted(json);
++        std::string result(json_str);
++        cJSON_free(json_str);
++        cJSON_Delete(json);
++        return result;
++    }
++
++    // Protocol v2 result (PROTOCOL_V2 §6.3): the tool's bare return value as raw
++    // JSON (string, number, bool, object), not MCP's {content:[...]} wrapper.
++    // The server flattens it for the LLM (true/null → "ok", string → its value,
++    // object → passthrough).
++    std::string CallV2(const PropertyList& properties) {
++        ReturnValue return_value = callback_(properties);
++
++        if (std::holds_alternative<ImageContent*>(return_value)) {
++            auto image_content = std::get<ImageContent*>(return_value);
++            std::string result = image_content->to_json();  // already a JSON object
++            delete image_content;
++            return result;
++        }
++
++        cJSON* value = nullptr;
++        if (std::holds_alternative<std::string>(return_value)) {
++            value = cJSON_CreateString(std::get<std::string>(return_value).c_str());
++        } else if (std::holds_alternative<bool>(return_value)) {
++            value = cJSON_CreateBool(std::get<bool>(return_value));
++        } else if (std::holds_alternative<int>(return_value)) {
++            value = cJSON_CreateNumber(std::get<int>(return_value));
++        } else if (std::holds_alternative<cJSON*>(return_value)) {
++            value = std::get<cJSON*>(return_value);  // take ownership
++        }
++
++        char* json_str = cJSON_PrintUnformatted(value);
++        std::string result(json_str ? json_str : "null");
++        cJSON_free(json_str);
++        cJSON_Delete(value);
++        return result;
++    }
+ };
+ 
+ class McpServer {
+@@ -323,20 +390,18 @@ public:
+     void AddTool(McpTool* tool);
+     void AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
+     void AddUserOnlyTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
+-    void ParseMessage(const cJSON* json);
+-    void ParseMessage(const std::string& message);
++
++    // Protocol v2 first-class tool frames (docs/PROTOCOL_V2.md §6). `root` is the
++    // decoded inbound tool_list / tool_call request; responses are sent via
++    // Application::SendToolMessage. Replaces v1's JSON-RPC ParseMessage.
++    void HandleToolList(const cJSON* root);
++    void HandleToolCall(const cJSON* root);
+ 
+ private:
+     McpServer();
+     ~McpServer();
+ 
+-    void ParseCapabilities(const cJSON* capabilities);
+-
+-    void ReplyResult(int id, const std::string& result);
+-    void ReplyError(int id, const std::string& message);
+-
+-    void GetToolsList(int id, const std::string& cursor, bool list_user_only_tools);
+-    void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments);
++    void ReplyToolError(int id, const std::string& code, const std::string& message);
+ 
+     std::vector<McpTool*> tools_;
+ };
 diff --git c/main/protocols/protocol.cc w/main/protocols/protocol.cc
-index 470cc91..53675f5 100644
+index 470cc91..7082fca 100644
 --- c/main/protocols/protocol.cc
 +++ w/main/protocols/protocol.cc
-@@ -78,6 +78,14 @@ void Protocol::SendMcpMessage(const std::string& payload) {
+@@ -39,24 +39,29 @@ void Protocol::SetError(const std::string& message) {
+     }
+ }
+ 
++// Protocol v2 (§4.2): barge-in / interrupt. No session_id — the connection is
++// the session. The wake-word reason is "wake" in v2 (v1 used
++// "wake_word_detected").
+ void Protocol::SendAbortSpeaking(AbortReason reason) {
+-    std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"abort\"";
++    std::string message = "{\"type\":\"abort\"";
+     if (reason == kAbortReasonWakeWordDetected) {
+-        message += ",\"reason\":\"wake_word_detected\"";
++        message += ",\"reason\":\"wake\"";
+     }
+     message += "}";
      SendText(message);
  }
  
++// Protocol v2 (§4.2): wake-word fired. Split out of v1's overloaded `listen`
++// type. `phrase` is the wake-word identifier; `score` is omitted (the AFE path
++// does not surface a confidence value here).
+ void Protocol::SendWakeWordDetected(const std::string& wake_word) {
+-    std::string json = "{\"session_id\":\"" + session_id_ + 
+-                      "\",\"type\":\"listen\",\"state\":\"detect\",\"text\":\"" + wake_word + "\"}";
++    std::string json = "{\"type\":\"wake\",\"phrase\":\"" + wake_word + "\"}";
+     SendText(json);
+ }
+ 
++// Protocol v2 (§4.2): begin a capture window.
+ void Protocol::SendStartListening(ListeningMode mode) {
+-    std::string message = "{\"session_id\":\"" + session_id_ + "\"";
+-    message += ",\"type\":\"listen\",\"state\":\"start\"";
++    std::string message = "{\"type\":\"listen_start\"";
+     if (mode == kListeningModeRealtime) {
+         message += ",\"mode\":\"realtime\"";
+     } else if (mode == kListeningModeAutoStop) {
+@@ -68,16 +73,45 @@ void Protocol::SendStartListening(ListeningMode mode) {
+     SendText(message);
+ }
+ 
++// Protocol v2 (§4.2): end a capture window.
+ void Protocol::SendStopListening() {
+-    std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"listen\",\"state\":\"stop\"}";
+-    SendText(message);
++    SendText("{\"type\":\"listen_stop\"}");
++}
++
++// Protocol v2 (§6): send a complete first-class tool frame verbatim (built by
++// McpServer). Replaces v1's {type:mcp,payload:{jsonrpc...}} envelope.
++void Protocol::SendToolMessage(const std::string& frame) {
++    SendText(frame);
+ }
+ 
+-void Protocol::SendMcpMessage(const std::string& payload) {
+-    std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"mcp\",\"payload\":" + payload + "}";
 +// Dotty: ambient perception event frame.
++// Protocol v2 (§4.8): a typed telemetry notification. No session_id; the event
++// name moves to the `event` field. data_json is the raw event payload object.
 +void Protocol::SendEvent(const std::string& name, const std::string& data_json) {
-+    std::string message = "{\"session_id\":\"" + session_id_ +
-+                          "\",\"type\":\"event\",\"name\":\"" + name +
++    std::string message = "{\"type\":\"telemetry\",\"event\":\"" + name +
 +                          "\",\"data\":" + data_json + "}";
-+    SendText(message);
+     SendText(message);
+ }
+ 
++// Protocol v2 (§5.2): grant the server `frames` more audio frames of budget.
++void Protocol::SendAudioCredit(int frames) {
++    if (frames <= 0) {
++        return;
++    }
++    SendText("{\"type\":\"audio_credit\",\"frames\":" + std::to_string(frames) + "}");
++}
++
++void Protocol::NotifyAudioFrameConsumed() {
++    if (++frames_consumed_since_grant_ >= kAudioCreditBatch) {
++        SendAudioCredit(frames_consumed_since_grant_);
++        frames_consumed_since_grant_ = 0;
++    }
++}
++
++void Protocol::ResetAudioCredit() {
++    frames_consumed_since_grant_ = 0;
 +}
 +
  bool Protocol::IsTimeout() const {
      const int kTimeoutSeconds = 120;
      auto now = std::chrono::steady_clock::now();
 diff --git c/main/protocols/protocol.h w/main/protocols/protocol.h
-index 28ef604..fd66f0f 100644
+index 28ef604..ce8593e 100644
 --- c/main/protocols/protocol.h
 +++ w/main/protocols/protocol.h
-@@ -73,6 +73,14 @@ public:
+@@ -72,7 +72,29 @@ public:
+     virtual void SendStartListening(ListeningMode mode);
      virtual void SendStopListening();
      virtual void SendAbortSpeaking(AbortReason reason);
-     virtual void SendMcpMessage(const std::string& message);
+-    virtual void SendMcpMessage(const std::string& message);
++    // Protocol v2: a complete first-class tool frame (tool_list / tool_call
++    // response) built by McpServer, sent verbatim. Replaces v1's SendMcpMessage
++    // (there is no {type:mcp,...} envelope in v2 — PROTOCOL_V2 §6).
++    virtual void SendToolMessage(const std::string& frame);
 +    // Dotty: ambient perception event frame.
-+    // Emits {"type":"event","name":<name>,"data":<data_json>} server-bound.
++    // Protocol v2: emits {"type":"telemetry","event":<name>,"data":<data_json>}
++    // server-bound (§4.8). No session_id — the connection is the session.
 +    virtual void SendEvent(const std::string& name, const std::string& data_json);
++
++    // Protocol v2 audio flow control (§5): grant the server `frames` more
++    // server→device audio frames of send budget.
++    virtual void SendAudioCredit(int frames);
++    // Called by the audio service each time a decoded TTS frame is consumed off
++    // the decode queue. Batches grants and emits audio_credit once a batch
++    // accumulates, so the server's send budget never starves.
++    void NotifyAudioFrameConsumed();
++    // Reset the unsent-credit accumulator (on channel open/close).
++    void ResetAudioCredit();
 +
 +    // Dotty: exposed for the proactive idle-channel reconnect in the
 +    // main clock-tick handler. True if no incoming WS frame has arrived
@@ -724,8 +1420,19 @@ index 28ef604..fd66f0f 100644
  
  protected:
      std::function<void(const cJSON* root)> on_incoming_json_;
-@@ -91,7 +99,6 @@ protected:
+@@ -86,12 +108,16 @@ protected:
+     int server_sample_rate_ = 24000;
+     int server_frame_duration_ = 60;
+     bool error_occurred_ = false;
+-    std::string session_id_;
++    std::string session_id_;  // v1/MQTT only; unused on the v2 websocket wire
+     std::chrono::time_point<std::chrono::steady_clock> last_incoming_time_;
  
++    // Protocol v2 flow control (§5): decoded TTS frames consumed but not yet
++    // credited back to the server. Grant once it reaches kAudioCreditBatch.
++    static constexpr int kAudioCreditBatch = 8;
++    int frames_consumed_since_grant_ = 0;
++
      virtual bool SendText(const std::string& text) = 0;
      virtual void SetError(const std::string& message);
 -    virtual bool IsTimeout() const;
@@ -733,22 +1440,309 @@ index 28ef604..fd66f0f 100644
  
  #endif // PROTOCOL_H
 diff --git c/main/protocols/websocket_protocol.cc w/main/protocols/websocket_protocol.cc
-index f0cc034..34739af 100644
+index f0cc034..766ae90 100644
 --- c/main/protocols/websocket_protocol.cc
 +++ w/main/protocols/websocket_protocol.cc
-@@ -78,6 +78,7 @@ bool WebsocketProtocol::IsAudioChannelOpened() const {
+@@ -7,7 +7,8 @@
+ #include <cstring>
+ #include <cJSON.h>
+ #include <esp_log.h>
+-#include <arpa/inet.h>
++#include <esp_app_desc.h>
++#include <sys/time.h>
+ #include "assets/lang_config.h"
+ 
+ #define TAG "WS"
+@@ -30,31 +31,10 @@ bool WebsocketProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
+         return false;
+     }
+ 
+-    if (version_ == 2) {
+-        std::string serialized;
+-        serialized.resize(sizeof(BinaryProtocol2) + packet->payload.size());
+-        auto bp2 = (BinaryProtocol2*)serialized.data();
+-        bp2->version = htons(version_);
+-        bp2->type = 0;
+-        bp2->reserved = 0;
+-        bp2->timestamp = htonl(packet->timestamp);
+-        bp2->payload_size = htonl(packet->payload.size());
+-        memcpy(bp2->payload, packet->payload.data(), packet->payload.size());
+-
+-        return websocket_->Send(serialized.data(), serialized.size(), true);
+-    } else if (version_ == 3) {
+-        std::string serialized;
+-        serialized.resize(sizeof(BinaryProtocol3) + packet->payload.size());
+-        auto bp3 = (BinaryProtocol3*)serialized.data();
+-        bp3->type = 0;
+-        bp3->reserved = 0;
+-        bp3->payload_size = htons(packet->payload.size());
+-        memcpy(bp3->payload, packet->payload.data(), packet->payload.size());
+-
+-        return websocket_->Send(serialized.data(), serialized.size(), true);
+-    } else {
+-        return websocket_->Send(packet->payload.data(), packet->payload.size(), true);
+-    }
++    // Protocol v2 (§7): one binary framing — the raw Opus payload, no header,
++    // no length prefix (WS frames are already length-delimited). The v1
++    // BinaryProtocol2/3 variants are gone.
++    return websocket_->Send(packet->payload.data(), packet->payload.size(), true);
+ }
+ 
+ bool WebsocketProtocol::SendText(const std::string& text) {
+@@ -77,19 +57,18 @@ bool WebsocketProtocol::IsAudioChannelOpened() const {
+ 
  void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
      (void)send_goodbye;  // Websocket doesn't need to send goodbye message
++    ResetAudioCredit();  // v2: drop any unsent flow-control credit (§5)
      websocket_.reset();
 +    vTaskDelay(pdMS_TO_TICKS(200));
  }
  
  bool WebsocketProtocol::OpenAudioChannel() {
-@@ -150,6 +151,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
-             auto root = cJSON_Parse(data);
-             auto type = cJSON_GetObjectItem(root, "type");
-             if (cJSON_IsString(type)) {
-+                ESP_LOGE(TAG, "WS recv type=%s", type->valuestring);
-                 if (strcmp(type->valuestring, "hello") == 0) {
-                     ParseServerHello(root);
-                 } else {
+     Settings settings("websocket", false);
+     std::string url = settings.GetString("url");
+     std::string token = settings.GetString("token");
+-    int version = settings.GetInt("version");
+-    if (version != 0) {
+-        version_ = version;
+-    }
+ 
+     error_occurred_ = false;
++    ResetAudioCredit();  // v2: fresh flow-control budget per channel (§5)
+ 
+     auto network = Board::GetInstance().GetNetwork();
+     websocket_ = network->CreateWebSocket(1);
+@@ -105,45 +84,20 @@ bool WebsocketProtocol::OpenAudioChannel() {
+         }
+         websocket_->SetHeader("Authorization", token.c_str());
+     }
+-    websocket_->SetHeader("Protocol-Version", std::to_string(version_).c_str());
++    websocket_->SetHeader("Protocol-Version", "2");
+     websocket_->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
+     websocket_->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
+ 
+     websocket_->OnData([this](const char* data, size_t len, bool binary) {
+         if (binary) {
++            // Protocol v2 (§7): binary frames are raw Opus, no header.
+             if (on_incoming_audio_ != nullptr) {
+-                if (version_ == 2) {
+-                    BinaryProtocol2* bp2 = (BinaryProtocol2*)data;
+-                    bp2->version = ntohs(bp2->version);
+-                    bp2->type = ntohs(bp2->type);
+-                    bp2->timestamp = ntohl(bp2->timestamp);
+-                    bp2->payload_size = ntohl(bp2->payload_size);
+-                    auto payload = (uint8_t*)bp2->payload;
+-                    on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
+-                        .sample_rate = server_sample_rate_,
+-                        .frame_duration = server_frame_duration_,
+-                        .timestamp = bp2->timestamp,
+-                        .payload = std::vector<uint8_t>(payload, payload + bp2->payload_size)
+-                    }));
+-                } else if (version_ == 3) {
+-                    BinaryProtocol3* bp3 = (BinaryProtocol3*)data;
+-                    bp3->type = bp3->type;
+-                    bp3->payload_size = ntohs(bp3->payload_size);
+-                    auto payload = (uint8_t*)bp3->payload;
+-                    on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
+-                        .sample_rate = server_sample_rate_,
+-                        .frame_duration = server_frame_duration_,
+-                        .timestamp = 0,
+-                        .payload = std::vector<uint8_t>(payload, payload + bp3->payload_size)
+-                    }));
+-                } else {
+-                    on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
+-                        .sample_rate = server_sample_rate_,
+-                        .frame_duration = server_frame_duration_,
+-                        .timestamp = 0,
+-                        .payload = std::vector<uint8_t>((uint8_t*)data, (uint8_t*)data + len)
+-                    }));
+-                }
++                on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
++                    .sample_rate = server_sample_rate_,
++                    .frame_duration = server_frame_duration_,
++                    .timestamp = 0,
++                    .payload = std::vector<uint8_t>((uint8_t*)data, (uint8_t*)data + len)
++                }));
+             }
+         } else {
+             // Parse JSON data
+@@ -172,7 +126,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
+         }
+     });
+ 
+-    ESP_LOGI(TAG, "Connecting to websocket server: %s with version: %d", url.c_str(), version_);
++    ESP_LOGI(TAG, "Connecting to websocket server: %s (Protocol-Version: 2)", url.c_str());
+     if (!websocket_->Connect(url.c_str())) {
+         ESP_LOGE(TAG, "Failed to connect to websocket server, code=%d", websocket_->GetLastError());
+         SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+@@ -201,23 +155,58 @@ bool WebsocketProtocol::OpenAudioChannel() {
+ }
+ 
+ std::string WebsocketProtocol::GetHelloMessage() {
+-    // keys: message type, version, audio_params (format, sample_rate, channels)
++    // Protocol v2 client hello (§3.1): client{}, audio{in,out}, features, and
++    // the telemetry events this firmware can emit. No session_id, no transport
++    // field (the connection IS the session, and the path/header already
++    // selected websocket + v2).
+     cJSON* root = cJSON_CreateObject();
+     cJSON_AddStringToObject(root, "type", "hello");
+-    cJSON_AddNumberToObject(root, "version", version_);
+-    cJSON* features = cJSON_CreateObject();
+-#if CONFIG_USE_SERVER_AEC
+-    cJSON_AddBoolToObject(features, "aec", true);
+-#endif
+-    cJSON_AddBoolToObject(features, "mcp", true);
++    cJSON_AddNumberToObject(root, "id", 1);
++
++    cJSON* client = cJSON_CreateObject();
++    cJSON_AddStringToObject(client, "name", "stack-chan");
++    auto app_desc = esp_app_get_description();
++    cJSON_AddStringToObject(client, "version", app_desc != nullptr ? app_desc->version : "0.0.0");
++    cJSON_AddStringToObject(client, "device_id", SystemInfo::GetMacAddress().c_str());
++    cJSON_AddStringToObject(client, "uuid", Board::GetInstance().GetUuid().c_str());
++    cJSON_AddItemToObject(root, "client", client);
++
++    // The server dictates audio params (§3.2); these are the device's fixed
++    // hardware: 16k mic in, 24k TTS out, 60ms Opus frames.
++    cJSON* audio = cJSON_CreateObject();
++    cJSON* in = cJSON_CreateObject();
++    cJSON_AddStringToObject(in, "codec", "opus");
++    cJSON_AddNumberToObject(in, "rate", 16000);
++    cJSON_AddNumberToObject(in, "channels", 1);
++    cJSON_AddNumberToObject(in, "frame_ms", OPUS_FRAME_DURATION_MS);
++    cJSON_AddItemToObject(audio, "in", in);
++    cJSON* out = cJSON_CreateObject();
++    cJSON_AddStringToObject(out, "codec", "opus");
++    cJSON_AddNumberToObject(out, "rate", 24000);
++    cJSON_AddNumberToObject(out, "channels", 1);
++    cJSON_AddNumberToObject(out, "frame_ms", OPUS_FRAME_DURATION_MS);
++    cJSON_AddItemToObject(audio, "out", out);
++    cJSON_AddItemToObject(root, "audio", audio);
++
++    // features: v2 retires v1's "mcp"/"aec" tokens — tools are first-class (§6).
++    cJSON* features = cJSON_CreateArray();
++    cJSON_AddItemToArray(features, cJSON_CreateString("tools"));
+     cJSON_AddItemToObject(root, "features", features);
+-    cJSON_AddStringToObject(root, "transport", "websocket");
+-    cJSON* audio_params = cJSON_CreateObject();
+-    cJSON_AddStringToObject(audio_params, "format", "opus");
+-    cJSON_AddNumberToObject(audio_params, "sample_rate", 16000);
+-    cJSON_AddNumberToObject(audio_params, "channels", 1);
+-    cJSON_AddNumberToObject(audio_params, "frame_duration", OPUS_FRAME_DURATION_MS);
+-    cJSON_AddItemToObject(root, "audio_params", audio_params);
++
++    // telemetry_events: advisory list of perception events this firmware emits
++    // (§4.8). The server logs unknown events; it acts on a recognized subset.
++    static const char* kTelemetryEvents[] = {
++        "face_detected", "face_lost", "face_identified_applied",
++        "face_identified_rejected", "sound_event", "head_pet_started",
++        "head_pet_ended", "state_changed", "chat_status", "idle_motion",
++        "dance_started", "dance_ended", "sleep_pose", "security_pose",
++    };
++    cJSON* telemetry_events = cJSON_CreateArray();
++    for (auto* ev : kTelemetryEvents) {
++        cJSON_AddItemToArray(telemetry_events, cJSON_CreateString(ev));
++    }
++    cJSON_AddItemToObject(root, "telemetry_events", telemetry_events);
++
+     auto json_str = cJSON_PrintUnformatted(root);
+     std::string message(json_str);
+     cJSON_free(json_str);
+@@ -226,27 +215,70 @@ std::string WebsocketProtocol::GetHelloMessage() {
+ }
+ 
+ void WebsocketProtocol::ParseServerHello(const cJSON* root) {
+-    auto transport = cJSON_GetObjectItem(root, "transport");
+-    if (transport == nullptr || strcmp(transport->valuestring, "websocket") != 0) {
+-        ESP_LOGE(TAG, "Unsupported transport: %s", transport->valuestring);
++    // Protocol v2 server hello (§3.2). result must be "ok"; an error means the
++    // server rejected the handshake (e.g. UNSUPPORTED_AUDIO).
++    auto result = cJSON_GetObjectItem(root, "result");
++    if (cJSON_IsString(result) && strcmp(result->valuestring, "ok") != 0) {
++        ESP_LOGE(TAG, "Server hello result: %s", result->valuestring);
++        SetError(Lang::Strings::SERVER_ERROR);
++        return;
++    }
++    auto error = cJSON_GetObjectItem(root, "error");
++    if (cJSON_IsObject(error)) {
++        auto code = cJSON_GetObjectItem(error, "code");
++        auto message = cJSON_GetObjectItem(error, "message");
++        ESP_LOGE(TAG, "Server rejected hello: %s: %s",
++                 cJSON_IsString(code) ? code->valuestring : "?",
++                 cJSON_IsString(message) ? message->valuestring : "?");
++        SetError(Lang::Strings::SERVER_ERROR);
+         return;
+     }
+ 
+-    auto session_id = cJSON_GetObjectItem(root, "session_id");
+-    if (cJSON_IsString(session_id)) {
+-        session_id_ = session_id->valuestring;
+-        ESP_LOGI(TAG, "Session ID: %s", session_id_.c_str());
++    // audio.out is what the server will send (TTS); bind our decoder to it.
++    auto audio = cJSON_GetObjectItem(root, "audio");
++    if (cJSON_IsObject(audio)) {
++        auto out = cJSON_GetObjectItem(audio, "out");
++        if (cJSON_IsObject(out)) {
++            auto rate = cJSON_GetObjectItem(out, "rate");
++            if (cJSON_IsNumber(rate)) {
++                server_sample_rate_ = rate->valueint;
++            }
++            auto frame_ms = cJSON_GetObjectItem(out, "frame_ms");
++            if (cJSON_IsNumber(frame_ms)) {
++                server_frame_duration_ = frame_ms->valueint;
++            }
++        }
+     }
+ 
+-    auto audio_params = cJSON_GetObjectItem(root, "audio_params");
+-    if (cJSON_IsObject(audio_params)) {
+-        auto sample_rate = cJSON_GetObjectItem(audio_params, "sample_rate");
+-        if (cJSON_IsNumber(sample_rate)) {
+-            server_sample_rate_ = sample_rate->valueint;
++    // time moves into the hello in v2 (one fewer round-trip than v1's OTA
++    // server_time). Set the system clock, mirroring Ota::ParseServerTime:
++    // fold the tz offset into the epoch so localtime reads correctly without a
++    // TZ env var, matching how the rest of the firmware treats time.
++    auto time_obj = cJSON_GetObjectItem(root, "time");
++    if (cJSON_IsObject(time_obj)) {
++        auto unix_ms = cJSON_GetObjectItem(time_obj, "unix_ms");
++        if (cJSON_IsNumber(unix_ms)) {
++            double ts = unix_ms->valuedouble;
++            auto tz_offset_min = cJSON_GetObjectItem(time_obj, "tz_offset_min");
++            if (cJSON_IsNumber(tz_offset_min)) {
++                ts += (tz_offset_min->valueint * 60.0 * 1000.0);
++            }
++            struct timeval tv;
++            tv.tv_sec = (time_t)(ts / 1000);
++            tv.tv_usec = (suseconds_t)((long long)ts % 1000) * 1000;
++            settimeofday(&tv, NULL);
++            ESP_LOGI(TAG, "Clock set from server hello");
+         }
+-        auto frame_duration = cJSON_GetObjectItem(audio_params, "frame_duration");
+-        if (cJSON_IsNumber(frame_duration)) {
+-            server_frame_duration_ = frame_duration->valueint;
++    }
++
++    // flow_control.audio_credit_initial is the server's starting send budget
++    // (§5.1); the device replenishes it as it plays frames (NotifyAudioFrame
++    // Consumed). Logged for visibility; no device-side counter is needed.
++    auto flow_control = cJSON_GetObjectItem(root, "flow_control");
++    if (cJSON_IsObject(flow_control)) {
++        auto initial = cJSON_GetObjectItem(flow_control, "audio_credit_initial");
++        if (cJSON_IsNumber(initial)) {
++            ESP_LOGI(TAG, "Server audio_credit_initial: %d", initial->valueint);
+         }
+     }
+ 
+diff --git c/main/protocols/websocket_protocol.h w/main/protocols/websocket_protocol.h
+index 48bbc00..e650965 100644
+--- c/main/protocols/websocket_protocol.h
++++ w/main/protocols/websocket_protocol.h
+@@ -24,7 +24,6 @@ public:
+ private:
+     EventGroupHandle_t event_group_handle_;
+     std::unique_ptr<WebSocket> websocket_;
+-    int version_ = 1;
+ 
+     void ParseServerHello(const cJSON* root);
+     bool SendText(const std::string& text) override;
