@@ -58,8 +58,8 @@ deferred items (hello renegotiation, wake pre-roll, `tools_inline`). Not yet in 
 
 ```json
 {
-  "ws_url": "ws://192.0.2.10:9098/v2/",
-  "firmware": {                    // optional
+  "ws_url": "ws://192.0.2.10:9098/xiaozhi/",
+  "firmware": {                    // optional, present only when an update is offered
     "version": "2.0.0",
     "url": "http://192.0.2.10:9099/firmware/stack-chan-2.0.0.bin"
   }
@@ -81,6 +81,11 @@ optionally `Authorization`). No `Activation-Version` (no activation in v2).
 - `mqtt` → MQTT not supported.
 - `websocket.version` → use `Protocol-Version` header instead.
 
+> **Server contract:** grimoire serves v2 discovery at **`GET /discover`** (the lean
+> `{ws_url, firmware?}` shape above; `firmware` is present only when an update URL is
+> configured). The v1 OTA endpoints (`/ota/`, `/xiaozhi/ota/`) stay mounted with the
+> richer v1 response for existing firmware. Both advertise the same `ws_url`.
+
 ### 2.2 WebSocket — everything else
 
 URL from `discover.ws_url`. Required headers at upgrade time:
@@ -94,6 +99,11 @@ URL from `discover.ws_url`. Required headers at upgrade time:
 
 Server MUST reject the upgrade with HTTP 426 (Upgrade Required) if `Protocol-Version` is
 not 1 or 2.
+
+> **Server contract:** the protocol version is carried by the `Protocol-Version` header,
+> not the URL path, so grimoire serves **both** v1 and v2 on the same handler. It mounts
+> it at the version-neutral **`/xiaozhi/`** (advertised to v2 devices) and keeps
+> **`/xiaozhi/v1/`** mounted for devices that cached it. A v2 device may use either path.
 
 ### 2.3 Optional: vision callback
 
@@ -121,7 +131,7 @@ move freely. Not part of the discovery payload.
     "in":  { "codec": "opus", "rate": 16000, "channels": 1, "frame_ms": 60 },
     "out": { "codec": "opus", "rate": 24000, "channels": 1, "frame_ms": 60 }
   },
-  "features": ["mcp", "wake_word_audio", "camera", "vision_client"],
+  "features": ["tools", "wake_word_audio", "camera", "vision_client"],
   "telemetry_events": ["face_seen", "head_touched", "battery_low", "fell_over"]
 }
 ```
@@ -151,7 +161,7 @@ ignore or wire them into the LLM context.
     "in":  { "rate": 16000, "frame_ms": 60 },     // confirms what server expects
     "out": { "rate": 24000, "frame_ms": 60 }      // confirms what server will send
   },
-  "features": ["mcp", "tools", "vision"],
+  "features": ["tools", "vision"],
   "time": {
     "unix_ms": 1716608284000,
     "tz_offset_min": -300                          // signed minutes from UTC
@@ -324,29 +334,34 @@ Device flushes the decoder queue for this utterance.
 
 ```json
 { "type": "caption", "utterance_id": 42, "text": "Hi there!", "final": false }
-{ "type": "caption", "utterance_id": 42, "text": "Hi there! How can I help?", "final": true }
+{ "type": "caption", "utterance_id": 42, "text": "Hi there! How can I help?", "final": false }
+{ "type": "caption", "utterance_id": 42, "final": true }
 ```
 
-`final: true` indicates the last caption update for this utterance. Subsequent captions
-with the same `utterance_id` after `final: true` are protocol errors.
+`final: true` marks the last caption for this utterance. The terminal caption **omits
+`text`** — it is a pure completion marker, not a text update. The device keeps the text it
+last displayed and treats `final: true` as "caption complete." Subsequent captions with
+the same `utterance_id` after `final: true` are protocol errors. (A `final: true` frame
+that *does* carry `text` is still legal for receivers to handle — show it — but the
+reference server never emits one.)
 
 **Granularity and text semantics (resolves §11 Q2).** One `caption` per spoken sentence,
-all sharing the utterance's `utterance_id`. `text` is **cumulative** — the full caption
-so far, not the latest sentence's delta — so the device displays `text` verbatim with no
-accumulation logic of its own (see the two-message example above: the second message
-repeats the first sentence). The last sentence's caption carries `final: true`.
+all sharing the utterance's `utterance_id`, each emitted in sync with that sentence's
+audio. `text` is **cumulative** — the full caption so far, not the latest sentence's delta
+— so the device displays `text` verbatim with no accumulation logic of its own (see the
+example: each message repeats all prior sentences). The completion marker (`final: true`,
+no `text`) follows the last sentence.
 
 Per-word / per-segment timing (`segments: [{text, start_ms, end_ms}]`) is **reserved for
 v2.1** and not part of v2: current TTS pipelines (e.g. Kokoro) emit sentence-chunked
 audio with no word timing. Adding `segments` later is a new optional field — non-breaking.
 
-> **Server contract:** because grimoire streams sentence-by-sentence and only learns a
-> reply is complete after the last sentence, it emits one `caption` per sentence with
-> `final: false`, then a terminal `caption` with `final: true` repeating the complete
-> text. So the final sentence's text appears twice (once `final: false`, once
-> `final: true`). This is conformant — `final: true` is the terminal marker, not
-> required to add new text — and lets the device treat the `final: true` frame uniformly
-> as "caption complete."
+> **Server contract:** grimoire emits one `caption` per sentence with `final: false` and
+> cumulative `text` (in sync with the audio), then a terminal `caption` with `final: true`
+> and **no `text`**. The full text rides the last `final: false` caption; the terminal
+> frame only signals completion, so no sentence text is ever duplicated. The device shows
+> the latest non-empty `text` and uses `final: true` as the uniform "caption complete"
+> signal.
 
 Decoupling means: the server CAN send `caption` without any audio (display-only update),
 or send audio without caption (silent playback), or mix freely.
@@ -402,6 +417,12 @@ Notification, no response:
 The set of legal `event` names is declared in `hello.telemetry_events`. Server may
 register listeners for specific events; unrecognized events SHOULD be logged but not
 treated as protocol errors (forward compatibility).
+
+> **Server contract:** grimoire logs every telemetry event and acts on `battery_low`
+> by sending a full-screen `alert` (§4.6) — `{title:"Battery low", emotion:"sad",
+> sound:"vibration"}`, with the `data.percent` (if present) folded into the message.
+> Unrecognized events are logged and ignored. Feeding telemetry into the LLM's ambient
+> context (so the assistant can react in conversation) is future work, not yet wired.
 
 ### 4.9 Error (either direction)
 
@@ -483,6 +504,19 @@ the wall clock (one 60ms frame per 60ms). Server side just consumes as it arrive
 Replaces v1's `{type:mcp, payload:{jsonrpc:..., method:...}}` triple-envelope with
 first-class WS messages. Semantically equivalent to MCP — same model of tools, args,
 results — but flat on the wire.
+
+> **"tools" vs "MCP" — what actually changed.** v2 drops MCP's *wire envelope* (the
+> JSON-RPC framing) and *name*, but keeps MCP's *model*: `tool_list` still paginates by
+> cursor like `tools/list`, `tool_call` still takes name+args and returns a result like
+> `tools/call`, and descriptors keep args schemas + permissions. "tools" is not a new
+> system replacing MCP — it is MCP semantics with the envelope peeled off. Three
+> consequences worth stating once:
+> - The token is **`tools`** everywhere on the v2 wire (hello feature, message types);
+>   the word `mcp` does not appear.
+> - The device's *internal* tool registry can stay MCP-shaped — only its protocol/
+>   transport layer changes to emit these flat messages (see §10).
+> - Bridging *external, standard* MCP servers (Claude Desktop, Anthropic's servers) into
+>   the catalog is a separate future server-side adapter, not part of this wire (§11 Q5).
 
 ### 6.1 Tool descriptor
 
@@ -821,5 +855,4 @@ The implementation-companion artifacts (all under `grimoire/internal/protov2` an
 
 Deferred (tracked in the "Server contract" call-outs, none blocking firmware bring-up):
 hello renegotiation (§3.3), `wake_word_audio` pre-roll handling (§4.2), `tools_inline`
-(§6.4), server-as-tool-provider (§6.5), and the v2 `/discover` HTTP endpoint (§2.1, still
-v1-only).
+(§6.4), and server-as-tool-provider (§6.5).
