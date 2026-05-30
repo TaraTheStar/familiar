@@ -227,6 +227,15 @@ func (o *v2Out) SendError(ctx context.Context, code, message string, refID int) 
 	_ = writeJSON(ctx, o.conn, protov2.Error{Type: "error", Code: code, Message: message, RefID: refID})
 }
 
+// SendAlert renders a full-screen popup on the device (§4.6), used to surface
+// device telemetry (alertSink). emotion is required by the wire; sound may be
+// empty (firmware-specific values otherwise).
+func (o *v2Out) SendAlert(ctx context.Context, title, message, emotion, sound string) error {
+	return writeJSON(ctx, o.conn, protov2.Alert{
+		Type: "alert", Title: title, Message: message, Emotion: emotion, Sound: sound,
+	})
+}
+
 // Close sends an advisory goodbye (§4.10) naming the reason, then the WS close
 // frame. The close frame does the real work; the device returns to idle on
 // OnAudioChannelClosed and reconnects lazily on the next wake word.

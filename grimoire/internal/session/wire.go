@@ -75,6 +75,14 @@ type errorSink interface {
 	SendError(ctx context.Context, code, message string, refID int)
 }
 
+// alertSink is the optional extension a deviceOut implements when its protocol
+// can render a full-screen device alert (PROTOCOL_V2 §4.6). The session uses it
+// to react to inbound telemetry (e.g. battery_low → a "charge me" popup). v1 has
+// no alert message and does not implement it, so v1 telemetry is log-only.
+type alertSink interface {
+	SendAlert(ctx context.Context, title, message, emotion, sound string) error
+}
+
 // inEvent is the closed set of normalized device → server events. The v1
 // decoder maps protocol.Listen{start/stop/detect} → evListenStart/Stop/Wake,
 // collapsing v1's overloaded "listen" type into the same shape v2 sends

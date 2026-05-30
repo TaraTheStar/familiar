@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -695,7 +696,7 @@ func (s *Session) dispatchText(ctx context.Context, data []byte) {
 			s.log.Debug("tool message but no tool port", "bytes", len(e.Raw))
 		}
 	case evTelemetry:
-		s.log.Info("event", "name", e.Name)
+		s.handleTelemetry(ctx, e)
 	case evAudioCredit:
 		// v2 audio flow control: route the refill to the in-flight TTS stream.
 		// Only the v2 sink implements creditSink; v1 never produces this event.
@@ -710,6 +711,45 @@ func (s *Session) dispatchText(ctx context.Context, data []byte) {
 	case evUnknown:
 		s.log.Info("unknown message type", "type", e.Type)
 	}
+}
+
+// handleTelemetry reacts to an ambient device-perception event (PROTOCOL_V2
+// §4.8). Every event is logged; recognized ones may drive device feedback. The
+// reference policy wires battery_low → a full-screen "charge me" alert (§4.6)
+// when the protocol supports alerts (v2; v1 is log-only). Unknown events are
+// logged and ignored — forward-compatible, never a protocol error. Richer
+// wiring (feeding events into the LLM's ambient context) is future work.
+func (s *Session) handleTelemetry(ctx context.Context, e evTelemetry) {
+	s.log.Info("telemetry", "event", e.Name, "data", string(e.Data))
+	switch e.Name {
+	case "battery_low":
+		as, ok := s.out.(alertSink)
+		if !ok {
+			return // protocol has no alert channel (v1): log-only above
+		}
+		msg := "Please charge me"
+		if pct := batteryPercent(e.Data); pct >= 0 {
+			msg = fmt.Sprintf("Battery at %d%% — please charge me", pct)
+		}
+		if err := as.SendAlert(ctx, "Battery low", msg, "sad", "vibration"); err != nil {
+			s.log.Warn("send battery alert", "err", err)
+		}
+	}
+}
+
+// batteryPercent extracts an integer percent from a battery_low telemetry
+// payload ({"percent": N}), or -1 if absent/unparseable.
+func batteryPercent(data json.RawMessage) int {
+	if len(data) == 0 {
+		return -1
+	}
+	var d struct {
+		Percent *int `json:"percent"`
+	}
+	if err := json.Unmarshal(data, &d); err != nil || d.Percent == nil {
+		return -1
+	}
+	return *d.Percent
 }
 
 // sendError reports a protocol error to the device when the active protocol
