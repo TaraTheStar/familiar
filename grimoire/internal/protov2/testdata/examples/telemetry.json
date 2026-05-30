@@ -1,0 +1,9 @@
+{
+  "type": "telemetry",
+  "event": "face_seen",
+  "data": {
+    "x": 120,
+    "y": 80,
+    "confidence": 0.92
+  }
+}

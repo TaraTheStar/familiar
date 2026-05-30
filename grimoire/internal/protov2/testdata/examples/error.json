@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "code": "ASR_TIMEOUT",
+  "message": "ASR service did not respond in 5s",
+  "ref_id": 42
+}

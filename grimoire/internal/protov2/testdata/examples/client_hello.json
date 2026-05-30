@@ -1,0 +1,36 @@
+{
+  "type": "hello",
+  "id": 1,
+  "client": {
+    "name": "stack-chan",
+    "version": "2.0.0",
+    "device_id": "aa:bb:cc:dd:ee:ff",
+    "uuid": "00000000-0000-0000-0000-000000000000"
+  },
+  "audio": {
+    "in": {
+      "codec": "opus",
+      "rate": 16000,
+      "channels": 1,
+      "frame_ms": 60
+    },
+    "out": {
+      "codec": "opus",
+      "rate": 24000,
+      "channels": 1,
+      "frame_ms": 60
+    }
+  },
+  "features": [
+    "mcp",
+    "wake_word_audio",
+    "camera",
+    "vision_client"
+  ],
+  "telemetry_events": [
+    "face_seen",
+    "head_touched",
+    "battery_low",
+    "fell_over"
+  ]
+}

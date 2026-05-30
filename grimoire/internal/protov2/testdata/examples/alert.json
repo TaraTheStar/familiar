@@ -1,0 +1,7 @@
+{
+  "type": "alert",
+  "title": "Battery low",
+  "message": "Please charge",
+  "emotion": "sad",
+  "sound": "vibration"
+}

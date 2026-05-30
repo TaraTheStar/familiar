@@ -1,0 +1,8 @@
+{
+  "type": "tool_call",
+  "id": 6,
+  "name": "self.audio.set_volume",
+  "args": {
+    "volume": 60
+  }
+}

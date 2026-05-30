@@ -1,0 +1,26 @@
+{
+  "type": "tool_list",
+  "id": 5,
+  "result": {
+    "tools": [
+      {
+        "name": "self.audio.set_volume",
+        "description": "Set speaker volume (0-100)",
+        "args_schema": {
+          "type": "object",
+          "properties": {
+            "volume": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "volume"
+          ]
+        },
+        "permission": "public"
+      }
+    ]
+  }
+}

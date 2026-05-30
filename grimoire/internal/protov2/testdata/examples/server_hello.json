@@ -1,0 +1,32 @@
+{
+  "type": "hello",
+  "id": 1,
+  "result": "ok",
+  "server": {
+    "name": "stackchan-server",
+    "version": "2.0.0"
+  },
+  "audio": {
+    "in": {
+      "rate": 16000,
+      "frame_ms": 60
+    },
+    "out": {
+      "rate": 24000,
+      "frame_ms": 60
+    }
+  },
+  "features": [
+    "mcp",
+    "tools",
+    "vision"
+  ],
+  "time": {
+    "unix_ms": 1716608284000,
+    "tz_offset_min": -300
+  },
+  "vision_url": "http://192.0.2.10:9099/vision",
+  "flow_control": {
+    "audio_credit_initial": 40
+  }
+}
