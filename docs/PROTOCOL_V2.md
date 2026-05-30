@@ -42,7 +42,11 @@ deferred items (hello renegotiation, wake pre-roll, `tools_inline`). Not yet in 
 
 - Not changing transports. Still HTTP for discovery + WebSocket for session. (HTTP/2,
   WebTransport, QUIC are all overkill for this hardware and rule out broad library reuse.)
-- Not changing audio codec. Still Opus. Still 16kHz mic / 24kHz TTS.
+- Not changing audio codec. Still Opus. 16kHz mic / 16kHz TTS — TTS is dictated at the
+  device's native 16k (its playback is AEC-locked to the mic rate), and the server
+  downsamples its 24kHz Kokoro source so the device decodes straight to output with no
+  on-device resample. (v1 dictated 24kHz and the device resampled, which on this
+  CPU-limited board starved playback; see the Stage C bring-up notes.)
 - Not changing MCP semantics. Tools, args, results — same model. We're just dropping the
   JSON-RPC envelope and exposing tool ops as first-class WS messages.
 - Not changing the embedding of typed JSON in WS text frames + raw audio in WS binary
@@ -129,7 +133,7 @@ move freely. Not part of the discovery payload.
   },
   "audio": {
     "in":  { "codec": "opus", "rate": 16000, "channels": 1, "frame_ms": 60 },
-    "out": { "codec": "opus", "rate": 24000, "channels": 1, "frame_ms": 60 }
+    "out": { "codec": "opus", "rate": 16000, "channels": 1, "frame_ms": 60 }
   },
   "features": ["tools", "wake_word_audio", "camera", "vision_client"],
   "telemetry_events": ["face_seen", "head_touched", "battery_low", "fell_over"]
@@ -159,7 +163,7 @@ ignore or wire them into the LLM context.
   },
   "audio": {
     "in":  { "rate": 16000, "frame_ms": 60 },     // confirms what server expects
-    "out": { "rate": 24000, "frame_ms": 60 }      // confirms what server will send
+    "out": { "rate": 16000, "frame_ms": 60 }      // server downsamples its 24kHz Kokoro to this
   },
   "features": ["tools", "vision"],
   "time": {
@@ -174,8 +178,10 @@ ignore or wire them into the LLM context.
 ```
 
 **Audio params: the server dictates, it does not negotiate.** The hardware is fixed
-(16k mic / 24k TTS), so the server's hello states the params it will use and the device
-MUST conform (downsample/reformat as needed) or close. The server does not inspect the
+(16k mic / 16k TTS), so the server's hello states the params it will use and the device
+MUST conform (downsample/reformat as needed) or close. (The server itself downsamples its
+24kHz Kokoro output to the dictated rate; the rate is the `-tts-sample-rate` flag,
+default 16000.) The server does not inspect the
 device's offered `audio` to pick a different value. The `UNSUPPORTED_AUDIO` error code
 (§9.3) remains defined for a server that *does* choose to validate, but the reference
 server never emits it.
