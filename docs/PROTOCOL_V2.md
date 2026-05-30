@@ -4,7 +4,11 @@ A normative spec for a redesigned wire protocol between a self-hosted StackChan 
 and its devices. Fixes the warts in v1 (the live contract, documented in
 [PROTOCOL_V1.md](PROTOCOL_V1.md)) while preserving its sensible design choices.
 
-**Status:** Draft. Not yet implemented in firmware or server.
+**Status:** §11 open questions resolved (see §11) and the **server contract is locked**:
+the grimoire server implements v2 end-to-end alongside v1 (which stays the default),
+verified by goldens, a fuzzer, and a v1↔v2 equivalence harness. Per-section
+"**Server contract**" call-outs pin what the reference server does, including the few
+deferred items (hello renegotiation, wake pre-roll, `tools_inline`). Not yet in firmware.
 
 **Selected by:** HTTP header `Protocol-Version: 2` during WS upgrade.
 
@@ -159,17 +163,16 @@ ignore or wire them into the LLM context.
 }
 ```
 
-If server can't match an `audio` param the device offered, it MUST either pick a different
-value (within both ends' capabilities) or fail the hello:
+**Audio params: the server dictates, it does not negotiate.** The hardware is fixed
+(16k mic / 24k TTS), so the server's hello states the params it will use and the device
+MUST conform (downsample/reformat as needed) or close. The server does not inspect the
+device's offered `audio` to pick a different value. The `UNSUPPORTED_AUDIO` error code
+(§9.3) remains defined for a server that *does* choose to validate, but the reference
+server never emits it.
 
-```json
-{ "type": "hello", "id": 1, "error": {
-    "code": "UNSUPPORTED_AUDIO",
-    "message": "Server requires 16k mic input"
-}}
-```
-
-The device then closes the connection.
+> **Server contract:** grimoire sends fixed `audio.in`/`audio.out` from its config and an
+> honest `features` list (`["tools"]`, plus `"vision"` when a vision callback is
+> configured) and `server.{name,version}`.
 
 ### 3.3 Hello renegotiation
 
@@ -177,18 +180,25 @@ Either side MAY send a fresh `hello` (with a new `id`) mid-session to renegotiat
 use: server wants to switch to a realtime/AEC pipeline. The other side responds with
 either a matching `hello` (accept) or `hello` with `error` (reject; old params remain).
 
+> **Server contract:** not yet implemented — grimoire logs a post-handshake `hello` and
+> keeps the original params. Renegotiation is reserved for the realtime/AEC work.
+
 ### 3.4 Heartbeat
 
-Use WebSocket-native ping/pong frames. Either side SHOULD send a ping every 30s of
-inactivity; receiver SHOULD respond within 5s. If three pings go unanswered, close.
+The server closes a connection that has been silent (no frame of any kind) past an idle
+timeout, matching the firmware's 120s timeout — half-open sockets are reaped rather than
+leaked. WebSocket-native ping/pong MAY also be used by either side but is not required.
 
-This replaces v1's implicit 120s "no incoming JSON = dead channel" rule, which couldn't
-distinguish slow servers from dead ones.
+> **Server contract:** grimoire uses the idle-timeout mechanism (`ReadIdleTimeout`,
+> default 120s) and does not send pings. An earlier draft mandated 30s ping/pong; that is
+> downgraded to optional — the idle timeout is the normative liveness rule.
 
 ### 3.5 Graceful close
 
 WebSocket close frame (code 1000) with reason text optional. Causes the other side to
-release session resources cleanly. Device transitions to `idle`.
+release session resources cleanly. Device transitions to `idle`. A side MAY send a
+`goodbye` notification (§4.10) just before the close to name the reason; it is advisory
+and the close frame alone is sufficient.
 
 ---
 
@@ -231,11 +241,42 @@ manual mode):
 `score` is optional model confidence. `phrase` is the wake-word phrase identifier (not
 necessarily a literal display string).
 
+**Wake-word audio (the pre-roll).** If the device advertised the `wake_word_audio`
+feature in its hello, a `wake` sent **from idle** opens the turn's audio window: the
+device then streams the buffered pre-roll (the ~2s of mic audio captured *before* the
+wake fired, so ASR sees the start of the utterance) as binary frames, then sends
+`listen_start`, then the live frames, then `listen_stop`. The ordering is:
+
+```
+wake {phrase, score}      // opens the audio window (wake_word_audio feature only)
+<N binary Opus frames>    // buffered pre-roll — no count field; self-delimited by listen_stop
+listen_start {mode}
+<live binary Opus frames>
+listen_stop
+```
+
+The window-opening rule (see §7): with `wake_word_audio`, the turn's audio window
+opens at `wake`; **without** it, the window opens at `listen_start` and `wake` carries
+no pre-roll. Either way, everything from the window-opening message through
+`listen_stop` is one utterance. This resolves §11 Q1 (the spec previously suggested
+frames *before* `wake`, which would orphan them under §7's correlation rule).
+
+A `wake` sent **during server TTS** is a barge-in (see §8), not a turn start: it is
+followed by `abort`, and does **not** open a capture window. Pre-roll applies only to a
+`wake` from idle.
+
 **Abort** — user interrupted server's TTS:
 
 ```json
 { "type": "abort", "reason": "wake" }         // or "user_action", "timeout", null
 ```
+
+> **Server contract:** grimoire acts on `abort` (cancels the in-flight reply; the open
+> utterance ends with `audio_cancel`, §4.4). It does **not** yet act on the
+> `wake_word_audio` pre-roll: the feature is off by default in firmware
+> (`CONFIG_SEND_WAKE_WORD_DATA=n`), so pre-roll frames are not expected; if sent before
+> `listen_start` they are currently dropped. The framing is fixed (above) so enabling it
+> later is a server change, not a protocol change.
 
 ### 4.3 Speech recognition (server → device)
 
@@ -266,13 +307,18 @@ stream. `estimated_duration_ms` is optional; lets device pre-allocate.
 
 Device transitions out of `speaking` state on receipt.
 
-**Audio cancel** — server (rarely) wants to cancel an in-flight audio stream it started:
+**Audio cancel** — server wants to cancel an in-flight audio stream it started:
 
 ```json
 { "type": "audio_cancel", "utterance_id": 42 }
 ```
 
 Device flushes the decoder queue for this utterance.
+
+> **Server contract:** grimoire emits `audio_cancel` (instead of `audio_end`) when a turn
+> is interrupted — a device `abort` (barge-in, §4.2/§8) cancels the in-flight reply and
+> the open utterance ends with `audio_cancel`. A normally-completed reply ends with
+> `audio_end`. The two are mutually exclusive per utterance.
 
 **Caption** — text to display, independent of audio state:
 
@@ -283,6 +329,24 @@ Device flushes the decoder queue for this utterance.
 
 `final: true` indicates the last caption update for this utterance. Subsequent captions
 with the same `utterance_id` after `final: true` are protocol errors.
+
+**Granularity and text semantics (resolves §11 Q2).** One `caption` per spoken sentence,
+all sharing the utterance's `utterance_id`. `text` is **cumulative** — the full caption
+so far, not the latest sentence's delta — so the device displays `text` verbatim with no
+accumulation logic of its own (see the two-message example above: the second message
+repeats the first sentence). The last sentence's caption carries `final: true`.
+
+Per-word / per-segment timing (`segments: [{text, start_ms, end_ms}]`) is **reserved for
+v2.1** and not part of v2: current TTS pipelines (e.g. Kokoro) emit sentence-chunked
+audio with no word timing. Adding `segments` later is a new optional field — non-breaking.
+
+> **Server contract:** because grimoire streams sentence-by-sentence and only learns a
+> reply is complete after the last sentence, it emits one `caption` per sentence with
+> `final: false`, then a terminal `caption` with `final: true` repeating the complete
+> text. So the final sentence's text appears twice (once `final: false`, once
+> `final: true`). This is conformant — `final: true` is the terminal marker, not
+> required to add new text — and lets the device treat the `final: true` frame uniformly
+> as "caption complete."
 
 Decoupling means: the server CAN send `caption` without any audio (display-only update),
 or send audio without caption (silent playback), or mix freely.
@@ -349,7 +413,27 @@ treated as protocol errors (forward compatibility).
 `code` is an enumerated machine-readable string. Recipient should not block on error
 codes — log + degrade gracefully.
 
-### 4.10 Tool messages (both directions)
+### 4.10 Goodbye (either direction)
+
+Advisory notification sent immediately before a graceful WebSocket close, naming why the
+session is ending (resolves §11 Q4):
+
+```json
+{ "type": "goodbye", "reason": "user_farewell" }
+```
+
+`reason` ∈ `{ idle_timeout, user_farewell, error, restart, shutdown }`. One-way: no `id`,
+no response. **Best-effort and advisory only** — it changes nothing about the state
+machine; the WebSocket close frame (§3.5) still does the work. Recipients MUST handle a
+bare close with no preceding `goodbye` (hard crashes and network drops skip it), and MUST
+tolerate unknown `reason` values.
+
+Sent in either direction: server→device (`idle_timeout`, `shutdown`, `restart`),
+device→server (`user_farewell`, low battery → `shutdown`). It is **not** `system/reboot`
+(§4.7): `goodbye` precedes a clean close; `system{reboot}` is the post-OTA hard restart.
+Do not conflate them.
+
+### 4.11 Tool messages (both directions)
 
 See §6.
 
@@ -415,11 +499,28 @@ results — but flat on the wire.
 }
 ```
 
+Tool descriptors carry **no `version` field** (resolves §11 Q3): the descriptor set is
+rediscovered every session (via `tool_list` or `tools_inline`), so the advertised schema
+is always authoritative within a session — there is no cross-version skew to reconcile.
+Because `name` is an opaque string, a future `name@v2` convention can be layered on with
+no protocol change if a tool's args ever need to evolve while old firmware is still in the
+field.
+
 `permission` ∈ `{public, user_only, system_only}`. Server-side decides what to expose
 to the LLM:
 - `public` — always available to LLM.
 - `user_only` — exposed only when user explicitly requests admin operations.
 - `system_only` — server-internal use only, never shown to LLM.
+
+> **Server contract:** grimoire exposes only `public` (and unset, treated as public)
+> tools to the LLM; `user_only` and `system_only` are discovered but filtered out before
+> the catalog reaches the model. (v1 MCP descriptors carry no `permission`; the device
+> already filters `user_only` at `tools/list`, so unset = public is correct there too.)
+> Runtime promotion of `user_only` for explicit admin requests is not yet implemented.
+
+> **Result text:** a `tool_call` result is raw JSON. grimoire flattens it for the LLM as
+> follows: a JSON string yields its value; `true`/`null`/empty yield `"ok"` (setter-style
+> success); anything else is passed through as compact JSON.
 
 ### 6.2 List tools (server → device)
 
@@ -464,6 +565,10 @@ for `tool_list`:
 
 If present, server SHOULD skip `tool_list` calls. Saves a round-trip on session open.
 
+> **Server contract:** not yet honored — grimoire always issues `tool_list` and ignores
+> `tools_inline`. Wiring it is a pure optimization (one fewer round-trip) and changes no
+> observable tool behavior.
+
 ### 6.5 Reverse direction: server-exposed tools
 
 v2 allows server→device tool listing too. Symmetrical: device can call `tool_list` /
@@ -473,6 +578,10 @@ shape.
 
 In v1, only device-as-MCP-server existed. v2 is bidirectional. Both sides MAY implement
 the server side of tool calls; neither is required to.
+
+> **Server contract:** grimoire does not expose itself as a tool provider (it does not
+> answer `tool_list`/`tool_call` *from* the device). Server-side helpers like
+> `get_current_time` are dispatched in-process during a turn, not advertised over the wire.
 
 ---
 
@@ -488,8 +597,11 @@ negotiated in hello (60ms).
 
 Correlation with audio_begin/end is by **temporal ordering**: server sends `audio_begin`,
 then N binary frames, then `audio_end`. Device knows binary frames received between
-those two control messages belong to that utterance. Same in reverse for mic audio (frames
-between `listen_start` and `listen_stop` belong to the user turn).
+those two control messages belong to that utterance. Same in reverse for mic audio: frames
+between the turn's window-opening message and `listen_stop` belong to the user turn. The
+window opens at `wake` when the device advertised `wake_word_audio` (so the buffered
+pre-roll counts as turn audio — §4.2), otherwise at `listen_start`. There are no binary
+frames outside an open window; a frame received with no open window is a protocol error.
 
 No timestamps in the frame (we don't do server-side AEC). No length prefix (WebSocket
 frames are already length-delimited). No magic numbers. Just bytes.
@@ -515,7 +627,8 @@ frames are already length-delimited). No magic numbers. Just bytes.
 — idle —
 
 5. User says "Hi Stackchan"
-   Device → wake {phrase:"hi_stackchan", score:0.81}
+   Device → wake {phrase:"hi_stackchan", score:0.81}   // opens window if wake_word_audio
+   Device → <binary Opus pre-roll frames>...           // only if wake_word_audio (§4.2)
    Device → listen_start {mode:auto}
    Device → <binary Opus frames>...
    Device → listen_stop
@@ -538,6 +651,12 @@ frames are already length-delimited). No magic numbers. Just bytes.
 
 9. Device → state listening (or idle if mode:manual)
    GOTO 5
+
+— session end —
+
+10. Either side ends the session:
+    → goodbye {reason:"idle_timeout"}   // advisory, optional (§4.10)
+    → WS close frame (1000)
 ```
 
 ### Barge-in
@@ -596,6 +715,13 @@ Receivers SHOULD recognize at least:
 Codes are forward-compatible: new codes can be added. Receivers MUST tolerate unknown
 codes (treat as `INTERNAL`).
 
+> **Server contract:** grimoire emits `PROTOCOL_VIOLATION` (malformed inbound frame),
+> `ASR_FAILED` (transcription error), and `LLM_FAILED` / `TTS_FAILED` (turn-pipeline
+> error, classified from the failure). Errors are suppressed when the turn was cancelled
+> by a barge-in (the failure is expected, not reportable). It does not emit `ASR_TIMEOUT`
+> (whisper is batch, no timeout), `BUSY`, or `UNSUPPORTED_AUDIO` (the server dictates
+> audio, §3.2). The device should log+degrade on any code, recognized or not.
+
 ### 9.4 Protocol violations
 
 If a message violates the protocol (missing required field, invalid type, etc.), receiver
@@ -623,41 +749,44 @@ drivers, audio pipeline, MCP server logic stay unchanged.
 
 ---
 
-## 11. Open questions
+## 11. Resolved questions
 
-1. **Should `wake` carry the wake-word audio?** v1 has `CONFIG_SEND_WAKE_WORD_DATA` that
-   pre-sends ~35 Opus packets before the wake message. v2 could pre-define this as part
-   of `wake` (binary frames before the `wake` JSON), or keep it optional. Recommend:
-   binary frames first, then `wake` JSON, then `listen_start`. Server's ASR gets the wake
-   phrase as part of the user turn audio — better recognition.
+All seven of the v1 draft's open questions are now decided. The decisions are reflected
+in the normative sections above; this section records the outcome and rationale.
 
-2. **Should `caption` support segment-level granularity?** Right now it's whole-utterance
-   text that can be revised. Some TTS pipelines emit per-word timing. Could add
-   `caption {utterance_id, segments: [{text:"Hi", start_ms:0, end_ms:200}]}`. Defer to
-   v2.1 unless needed.
+1. **Should `wake` carry the wake-word audio? → Yes; `wake` opens the audio window.**
+   When the device advertises the `wake_word_audio` feature, a `wake` from idle opens the
+   turn's audio window and the buffered pre-roll streams as binary frames before
+   `listen_start` (§4.2, §7). This differs from this draft's original suggestion of frames
+   *before* `wake`, which would orphan them under §7's correlation rule. Gated by the
+   feature flag, default off — matches the firmware's current `CONFIG_SEND_WAKE_WORD_DATA=n`
+   while defining the framing once so flipping it on later needs no protocol revision.
 
-3. **Should tools have a `version` field?** For schema evolution. e.g.
-   `self.audio.set_volume@v2`. Helps if device firmware changes a tool's args without
-   renaming. Not blocking — can add later.
+2. **Should `caption` support segment-level granularity? → Not in v2.** One `caption` per
+   sentence, cumulative `text`, device displays verbatim (§4.4). Per-word `segments` is
+   reserved for v2.1 (a non-breaking optional addition); current TTS has no word timing.
 
-4. **Should there be a session-level `goodbye` exchange?** Currently we rely on WS close.
-   A `goodbye` notification before close might be nicer (lets the recipient log the
-   reason: idle timeout, user farewell, error, restart).
+3. **Should tools have a `version` field? → No.** Schema is rediscovered per session, so
+   there is no version skew within a session; a future `name@v2` convention needs no
+   protocol change (§6.1).
 
-5. **MCP compatibility shim?** Some tools (Anthropic's MCP servers, Claude Desktop, etc.)
-   speak standard MCP. If we want to bridge those into the server, we'd implement an
-   MCP-to-v2 adapter server-side. Not part of the protocol itself.
+4. **Should there be a session-level `goodbye` exchange? → Yes, advisory.** A best-effort
+   `goodbye {reason}` notification in either direction, sent before a graceful close; the
+   close frame still does the work (§4.10, §3.5).
 
-6. **Streaming transcripts?** v1 only sends final `stt`. v2's `transcript` has a `final`
-   field, implying partials are allowed. Worth confirming whether server-side ASR emits
-   partials (SenseVoiceSmall is batch-only AFAIK; would need streaming ASR for true
-   partials). For now `final: true` always.
+5. **MCP compatibility shim? → Out of scope for the wire protocol.** Bridging external
+   standard-MCP servers (Claude Desktop, Anthropic's servers) into the tool catalog is a
+   future server-side adapter, not part of v2. Build it later if we want to expose
+   external MCP tools to the LLM.
 
-7. **Should `display` updates be batched?** A sequence of
-   `display{status:thinking} → display{emotion:happy} → display{status:speaking}` is
-   three messages where one would do. We could allow combined updates (already supported
-   by the schema — both fields optional). Should we *require* combined updates? Probably
-   not — flexibility wins for streaming UI.
+6. **Streaming transcripts? → `final: true` always for now.** whisper.cpp is batch (it
+   transcribes only after the turn endpoints). The `transcript.final` field stays in the
+   schema for forward compatibility, but the server always sends `final: true` until a
+   streaming ASR is in place (§4.3).
+
+7. **Should `display` updates be batched? → Allowed, not required.** Both fields are
+   independently optional (§4.5); senders SHOULD combine `emotion` and `status` when both
+   are known together, but streaming partial updates remain legal.
 
 ---
 
@@ -677,10 +806,20 @@ code stays as-is for backward compat.
 
 ## 13. Status of this document
 
-Draft. Bake it for a few days, build the server against v1 for short-term needs, revisit
-v2 once we've actually used the system and seen what hurts.
+The §11 open questions are resolved and the **server side is implemented and the contract
+locked** — the wire format is stable to build firmware against. Per the migration plan
+(§10) the server speaks v1 + v2 in parallel (v1 default); firmware is unchanged.
 
-When implementing, also write:
-- `examples/` — JSON message exemplars for every type, suitable for protocol tests.
-- A wire-protocol fuzzer to catch dispatcher bugs.
-- A v1↔v2 adapter test harness that proves the migration path.
+The implementation-companion artifacts (all under `grimoire/internal/protov2` and
+`grimoire/internal/session`) are done:
+- **Examples** — JSON exemplars for every message type (`protov2/testdata/examples/`,
+  generated + validated by `TestExamples`).
+- **Wire fuzzer** — `FuzzDecode`: no panics, type-stable round-trips on the dispatcher.
+- **v1↔v2 adapter harness** — `TestV1V2Equivalence` runs one scripted turn through both
+  protocols and asserts identical meaning; the seam-contract test pins the loop's call
+  order; per-protocol goldens pin exact bytes.
+
+Deferred (tracked in the "Server contract" call-outs, none blocking firmware bring-up):
+hello renegotiation (§3.3), `wake_word_audio` pre-roll handling (§4.2), `tools_inline`
+(§6.4), server-as-tool-provider (§6.5), and the v2 `/discover` HTTP endpoint (§2.1, still
+v1-only).
