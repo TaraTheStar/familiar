@@ -1,5 +1,7 @@
-# Define xiaozhi source directory
-set(XIAOZHI_MAIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../xiaozhi-esp32/main")
+# Vendored upstream firmware core (pruned fork of 78/xiaozhi-esp32 @ v2.2.4 —
+# see ../vendor/stackchan-esp32/VENDOR.md). Our StackChan board code lives in
+# this same `main/`; the core supplies audio/display/protocols/mcp_server/etc.
+set(FIRMWARE_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/stackchan-esp32/main")
 
 file(GLOB_RECURSE STACK_CHAN_SOURCES
     "apps/app_launcher/*.c" "apps/app_launcher/*.cc" "apps/app_launcher/*.cpp"
@@ -68,35 +70,35 @@ set(SOURCES "audio/audio_codec.cc"
             # "main.cc"
             )
 
-# Transform relative paths to absolute paths from xiaozhi-esp32/main
-list(TRANSFORM SOURCES PREPEND "${XIAOZHI_MAIN_DIR}/")
+# Transform relative paths to absolute paths from the vendored firmware core (vendor/stackchan-esp32/main)
+list(TRANSFORM SOURCES PREPEND "${FIRMWARE_CORE_DIR}/")
 
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
-# Transform include dirs to absolute paths from xiaozhi-esp32/main
-list(TRANSFORM INCLUDE_DIRS PREPEND "${XIAOZHI_MAIN_DIR}/")
+# Transform include dirs to absolute paths from the vendored firmware core (vendor/stackchan-esp32/main)
+list(TRANSFORM INCLUDE_DIRS PREPEND "${FIRMWARE_CORE_DIR}/")
 
 # Add board common files
 list(APPEND SOURCES
-    "${XIAOZHI_MAIN_DIR}/boards/common/board.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/wifi_board.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/ml307_board.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/nt26_board.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/dual_network_board.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/adc_battery_monitor.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/afsk_demod.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/axp2101.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/backlight.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/button.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/i2c_device.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/knob.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/power_save_timer.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/press_to_talk_mcp_tool.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/sleep_timer.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/sy6970.cc"
-    "${XIAOZHI_MAIN_DIR}/boards/common/system_reset.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/board.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/wifi_board.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/ml307_board.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/nt26_board.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/dual_network_board.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/adc_battery_monitor.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/afsk_demod.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/axp2101.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/backlight.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/button.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/i2c_device.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/knob.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/power_save_timer.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/press_to_talk_mcp_tool.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/sleep_timer.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/sy6970.cc"
+    "${FIRMWARE_CORE_DIR}/boards/common/system_reset.cc"
     ${STACK_CHAN_SOURCES}
 )
-list(APPEND INCLUDE_DIRS ${XIAOZHI_MAIN_DIR}/boards/common ${STACK_CHAN_INCLUDE_DIRS})
+list(APPEND INCLUDE_DIRS ${FIRMWARE_CORE_DIR}/boards/common ${STACK_CHAN_INCLUDE_DIRS})
 
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
@@ -129,28 +131,28 @@ endif()
 
 if(MANUFACTURER)
     file(GLOB BOARD_SOURCES
-        ${XIAOZHI_MAIN_DIR}/boards/${MANUFACTURER}/${BOARD_TYPE}/*.cc
-        ${XIAOZHI_MAIN_DIR}/boards/${MANUFACTURER}/${BOARD_TYPE}/*.c
+        ${FIRMWARE_CORE_DIR}/boards/${MANUFACTURER}/${BOARD_TYPE}/*.cc
+        ${FIRMWARE_CORE_DIR}/boards/${MANUFACTURER}/${BOARD_TYPE}/*.c
     )
 else()
     file(GLOB BOARD_SOURCES
-        ${XIAOZHI_MAIN_DIR}/boards/${BOARD_TYPE}/*.cc
-        ${XIAOZHI_MAIN_DIR}/boards/${BOARD_TYPE}/*.c
+        ${FIRMWARE_CORE_DIR}/boards/${BOARD_TYPE}/*.cc
+        ${FIRMWARE_CORE_DIR}/boards/${BOARD_TYPE}/*.c
     )
 endif()
 list(APPEND SOURCES ${BOARD_SOURCES})
 
 # Select audio processor according to Kconfig
 if(CONFIG_USE_AUDIO_PROCESSOR)
-    list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/audio/processors/afe_audio_processor.cc")
+    list(APPEND SOURCES "${FIRMWARE_CORE_DIR}/audio/processors/afe_audio_processor.cc")
 else()
-    list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/audio/processors/no_audio_processor.cc")
+    list(APPEND SOURCES "${FIRMWARE_CORE_DIR}/audio/processors/no_audio_processor.cc")
 endif()
 if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4)
-    list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/audio/wake_words/afe_wake_word.cc")
-    list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/audio/wake_words/custom_wake_word.cc")
+    list(APPEND SOURCES "${FIRMWARE_CORE_DIR}/audio/wake_words/afe_wake_word.cc")
+    list(APPEND SOURCES "${FIRMWARE_CORE_DIR}/audio/wake_words/custom_wake_word.cc")
 else()
-    list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/audio/wake_words/esp_wake_word.cc")
+    list(APPEND SOURCES "${FIRMWARE_CORE_DIR}/audio/wake_words/esp_wake_word.cc")
 endif()
 
 # Auto Select Additional Sources
@@ -237,15 +239,15 @@ elseif(CONFIG_LANGUAGE_SR_RS)
 endif()
 
 # Define generation path
-set(LANG_JSON "${XIAOZHI_MAIN_DIR}/assets/locales/${LANG_DIR}/language.json")
-set(LANG_HEADER "${XIAOZHI_MAIN_DIR}/assets/lang_config.h")
+set(LANG_JSON "${FIRMWARE_CORE_DIR}/assets/locales/${LANG_DIR}/language.json")
+set(LANG_HEADER "${FIRMWARE_CORE_DIR}/assets/lang_config.h")
 
 # Collect current language audio files
-file(GLOB LANG_SOUNDS ${XIAOZHI_MAIN_DIR}/assets/locales/${LANG_DIR}/*.ogg)
+file(GLOB LANG_SOUNDS ${FIRMWARE_CORE_DIR}/assets/locales/${LANG_DIR}/*.ogg)
 
 # If not en-US, collect en-US audio files as fallback for missing files
 if(NOT LANG_DIR STREQUAL "en-US")
-    file(GLOB EN_US_SOUNDS ${XIAOZHI_MAIN_DIR}/assets/locales/en-US/*.ogg)
+    file(GLOB EN_US_SOUNDS ${FIRMWARE_CORE_DIR}/assets/locales/en-US/*.ogg)
     
     # Extract filenames (without path) from current language
     set(EXISTING_NAMES "")
@@ -266,7 +268,7 @@ endif()
 
 # file(GLOB COMMON_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
 file(GLOB COMMON_SOUNDS 
-    ${XIAOZHI_MAIN_DIR}/assets/common/*.ogg
+    ${FIRMWARE_CORE_DIR}/assets/common/*.ogg
     assets/sfx/*.ogg
 )
 
@@ -286,14 +288,14 @@ endif()
 
 # Include EspVideo if target is ESP32S3 or ESP32P4
 if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4)
-    list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/boards/common/esp_video.cc"
-                        "${XIAOZHI_MAIN_DIR}/boards/common/rndis_board.cc"
+    list(APPEND SOURCES "${FIRMWARE_CORE_DIR}/boards/common/esp_video.cc"
+                        "${FIRMWARE_CORE_DIR}/boards/common/rndis_board.cc"
                         )
 endif()
 
 # Include Esp32Camera if target is ESP32S3
 if(CONFIG_IDF_TARGET_ESP32S3)
-    list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/boards/common/esp32_camera.cc")
+    list(APPEND SOURCES "${FIRMWARE_CORE_DIR}/boards/common/esp32_camera.cc")
 endif()
 
 idf_component_register(SRCS ${SOURCES}
@@ -339,12 +341,12 @@ target_compile_definitions(${COMPONENT_LIB}
 # Add generation rules
 add_custom_command(
     OUTPUT ${LANG_HEADER}
-    COMMAND python ${XIAOZHI_MAIN_DIR}/../scripts/gen_lang.py
+    COMMAND python ${FIRMWARE_CORE_DIR}/../scripts/gen_lang.py
             --language "${LANG_DIR}"
             --output "${LANG_HEADER}"
     DEPENDS
         ${LANG_JSON}
-        ${XIAOZHI_MAIN_DIR}/../scripts/gen_lang.py
+        ${FIRMWARE_CORE_DIR}/../scripts/gen_lang.py
     COMMENT "Generating ${LANG_DIR} language config"
 )
 
@@ -436,10 +438,10 @@ function(build_default_assets_bin)
     # Create custom command to build assets
     add_custom_command(
         OUTPUT ${GENERATED_ASSETS_BIN}
-        COMMAND python ${XIAOZHI_MAIN_DIR}/../scripts/build_default_assets.py ${BUILD_ARGS}
+        COMMAND python ${FIRMWARE_CORE_DIR}/../scripts/build_default_assets.py ${BUILD_ARGS}
         DEPENDS
             ${SDKCONFIG}
-            ${XIAOZHI_MAIN_DIR}/../scripts/build_default_assets.py
+            ${FIRMWARE_CORE_DIR}/../scripts/build_default_assets.py
         COMMENT "Building default assets.bin based on configuration"
         VERBATIM
     )
@@ -497,7 +499,7 @@ function(get_assets_local_file assets_source assets_local_file_var)
         if(IS_ABSOLUTE "${assets_source}")
             set(ASSETS_LOCAL_FILE "${assets_source}")
         else()
-            set(ASSETS_LOCAL_FILE "${XIAOZHI_MAIN_DIR}/${assets_source}")
+            set(ASSETS_LOCAL_FILE "${FIRMWARE_CORE_DIR}/${assets_source}")
         endif()
         
         # Check if local file exists

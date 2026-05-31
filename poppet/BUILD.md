@@ -29,33 +29,42 @@ idf.py --version                 # expect: ESP-IDF v5.5.4
 
 ## 2. Fetch source dependencies (one time, needs network)
 
-Clones the deps in `repos.json` (incl. `78/xiaozhi-esp32 @ v2.2.4`) into
-`firmware/` and applies `patches/xiaozhi-esp32.patch`. These dirs are
-gitignored — they are not part of this repo.
+The firmware core is **vendored in-tree** at `vendor/stackchan-esp32/` (a pruned
+fork of `78/xiaozhi-esp32 @ v2.2.4` — see its `VENDOR.md`); it is committed, not
+fetched. `fetch_repos.py` now only clones the unmodified component libraries
+(mooncake, mooncake_log, smooth_ui_toolkit, ArduinoJson, esp-now) into
+`components/` (gitignored). Run from the `poppet/` dir:
 
 ```bash
-cd firmware
 python3 ./fetch_repos.py
 ```
 
-Expect the line: `Applied patch .../patches/xiaozhi-esp32.patch to .../xiaozhi-esp32`.
-If you instead see `cannot be applied cleanly ... skipped`, the build would
-silently produce **stock unpatched xiaozhi** — do not proceed; the patch must
-apply (this branch already fixed the v2.2.4 context drift that caused that).
+> **History:** through 2026-05 the core was fetched fresh and a large patch
+> (`patches/xiaozhi-esp32.patch`) was applied on top. Once the project went
+> Protocol-v2-only it diverged from upstream for good, so the core was vendored
+> and the patch + its `repos.json` entry removed. To pull a newer upstream now,
+> do a manual 3-way merge (see `vendor/stackchan-esp32/VENDOR.md`).
 
 ## 3. Configure (set YOUR server — required, no cloud defaults)
 
+From the `poppet/` dir:
+
 ```bash
-cd firmware
 idf.py set-target esp32s3
 idf.py menuconfig
 ```
 
-Under **Xiaozhi Assistant**, set both (they are intentionally blank):
+Under the **Xiaozhi Assistant** menu (upstream's Kconfig menu name — unchanged so
+the vendored `CONFIG_*` symbols stay stable), set both (they are intentionally
+blank):
 
 - **Default OTA URL** — your self-hosted server, e.g.
-  `http://stackchan-server.lan:8003/xiaozhi/ota/`
+  `http://192.0.2.10:9099/grimoire/ota/`
   (the device gets its websocket/server address from this OTA response).
+  **Use the `/grimoire/` path** — the server is v2-only and serves `/grimoire/`
+  (the legacy `/xiaozhi/` mount was removed). **Keep the trailing slash:** without
+  it (`…/grimoire/ota`) the server 307-redirects to the slashed path and the ESP
+  OTA client does **not** follow redirects, so the check fails.
 - **NTP server 1 (primary)** — your LAN NTP host, e.g. `ntp.lan` or `192.168.x.x`.
   Leave blank only if the coin cell keeps RTC time and you use plain `http://`
   for the server (no TLS clock dependency). NTP 2/3 are optional fallbacks.
@@ -66,6 +75,8 @@ no egress), it retries ~10× with a `cloud_slash` alert, then gives up and
 runs idle. Fail-safe — but it has no AI server until you configure one.
 
 ## 4. Build / flash / monitor
+
+From the `poppet/` dir:
 
 ```bash
 idf.py build
