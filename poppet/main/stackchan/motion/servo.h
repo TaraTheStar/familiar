@@ -99,10 +99,14 @@ public:
      */
     virtual void setTorqueEnabled(bool enabled)
     {
+        // Cache the commanded torque state so update() can decide whether an
+        // auto-release is needed without a serial round-trip. Subclasses that
+        // drive real hardware (e.g. ScsServo) chain to this before writing.
+        _torque_enabled = enabled;
     }
     virtual bool getTorqueEnabled()
     {
-        return false;
+        return _torque_enabled;
     }
 
     /**
@@ -174,10 +178,11 @@ protected:
     uitk::AnimateValue _angle_anim;
 
     uint32_t _last_tick               = 0;
-    uint32_t _last_torque_check_tick  = 0;
+    uint32_t _last_motion_ms          = 0;
     bool _snap_to_target_on_rest      = false;
     bool _auto_torque_release_enabled = true;
     bool _auto_angle_sync_enabled     = true;
+    bool _torque_enabled              = false;
 
     void apply_default_spring_options();
     void update_angle_anim_target(int angle);

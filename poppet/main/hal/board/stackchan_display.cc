@@ -395,8 +395,47 @@ void StackChanAvatarDisplay::SetEmotion(const char* emotion)
 
     auto& avatar = stackchan.avatar();
 
+    // Font Awesome alert icons leaking in via Application::Alert().
+    //
+    // Upstream xiaozhi overloads SetEmotion() to also paint a Font Awesome
+    // *icon* glyph (Application::Alert() passes its icon as the `emotion` arg →
+    // application.cc Alert() → display->SetEmotion(icon)). Stock firmware renders
+    // the string directly in the icon font, so the icon name IS the glyph. Our
+    // avatar instead maps named emotions → Emotion enum faces, so these icon
+    // names aren't emotions at all — they're a system/status concern (OTA
+    // unreachable, asset download, wifi-config, etc.), not the character's mood.
+    // Per product decision: an alert must NOT repaint the avatar's face — leave
+    // whatever expression is current. Recognise the known alert glyphs and
+    // return without touching the emotion. (All confirmed present in
+    // managed_components/78__xiaozhi-fonts/src/font_awesome.c.)
+    //
+    // NOTE: `microchip_ai` is deliberately NOT in this list — upstream uses it as
+    // the post-boot *resting* face (application.cc:450, after assets apply), so we
+    // genuinely want it to set Neutral; it's handled as an emotion below.
+    static const char* const kAlertIcons[] = {
+        "cloud_slash",          // OTA/version check failed (server unreachable)
+        "cloud_arrow_down",     // downloading assets
+        "triangle_exclamation", // PIN / registration / modem-init errors
+        "circle_xmark",         // generic error / asset-download / upgrade failed
+        "download",             // OTA upgrade in progress
+        "gear",                 // wifi-config mode
+        "link",                 // activation (currently commented out upstream)
+    };
+    for (const char* icon : kAlertIcons) {
+        if (strcmp(emotion, icon) == 0) {
+            // Status bar / alert popup owns this; the face stays as-is.
+            ESP_LOGD(TAG, "alert icon '%s' — leaving avatar face unchanged", emotion);
+            return;
+        }
+    }
+
     // Map emotion string to stackchan::Emotion
     if (strcmp(emotion, "neutral") == 0) {
+        avatar.setEmotion(Emotion::Neutral);
+    } else if (strcmp(emotion, "microchip_ai") == 0) {
+        // Upstream's idle/ready resting face, set once assets are applied at
+        // boot (application.cc:450). Our equivalent resting expression is
+        // Neutral. (Font Awesome AI-chip glyph upstream; an emotion for us.)
         avatar.setEmotion(Emotion::Neutral);
     } else if (strcmp(emotion, "happy") == 0) {
         avatar.setEmotion(Emotion::Happy);

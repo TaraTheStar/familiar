@@ -9,7 +9,6 @@
 #include <stackchan/camera/camera_stream_guard.h>
 
 #include <esp_log.h>
-#include <esp_heap_caps.h>
 #include <hal/hal.h>
 #include <hal/board/hal_bridge.h>
 #include <hal/board/stackchan_camera.h>
@@ -20,9 +19,23 @@
 
 #define TAG "FaceDetector"
 
-static constexpr int FRAME_W = 320;
-static constexpr int FRAME_H = 240;
-static constexpr size_t RGB_BUF_SIZE = FRAME_W * FRAME_H * 3;
+// Adaptive detection cadence. The detector is enabled the entire time the
+// device isn't sleeping (so it can catch walk-up greetings), but running the
+// MSR+MNP pipeline at a fixed ~20 Hz forever pegs Core 0 — when a face is in
+// frame each pass is ~38 ms of NN inference, and the back-to-back inference
+// starves the Core 0 idle task enough to trip task_wdt
+// (CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y). It also fights the Core 0
+// audio_input/AFE task that barge-in (WS2) needs.
+//
+// Two tiers: while a face has been seen within kTrackHoldMs we poll at the
+// fast TRACK cadence so servo face-tracking stays smooth; otherwise we drop to
+// the slow SEARCH cadence — ~3 Hz is plenty to notice someone entering frame,
+// and it cuts idle (nobody present) Core-0 load by ~6x. The hold window keeps
+// us in TRACK across brief single-frame detection dropouts so the cadence
+// doesn't thrash.
+static constexpr uint32_t kTrackIntervalMs  = 50;    // face present → ~20 Hz
+static constexpr uint32_t kSearchIntervalMs = 300;   // searching   → ~3 Hz
+static constexpr uint32_t kTrackHoldMs      = 2000;  // stay fast this long after last hit
 
 // ---------------------------------------------------------------------------
 // Detector tuning knobs — keep all magic numbers here so reverts are one-line.
@@ -70,17 +83,6 @@ void FaceDetector::start()
     _running.store(true, std::memory_order_release);
     _stop_sem = xSemaphoreCreateBinary();
 
-    _rgb_buffer = (uint8_t*)heap_caps_malloc(RGB_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!_rgb_buffer) {
-        ESP_LOGE(TAG, "Failed to allocate %d bytes for RGB buffer", (int)RGB_BUF_SIZE);
-        _running.store(false, std::memory_order_release);
-        if (_stop_sem) {
-            vSemaphoreDelete(_stop_sem);
-            _stop_sem = nullptr;
-        }
-        return;
-    }
-
     xTaskCreatePinnedToCore(taskEntry, "face_det", 16384, this, 1, &_task_handle, 0);
     ESP_LOGI(TAG, "Face detector task started on Core 0");
 }
@@ -96,10 +98,6 @@ void FaceDetector::stop()
     if (_stop_sem) {
         vSemaphoreDelete(_stop_sem);
         _stop_sem = nullptr;
-    }
-    if (_rgb_buffer) {
-        heap_caps_free(_rgb_buffer);
-        _rgb_buffer = nullptr;
     }
     ESP_LOGI(TAG, "Face detector stopped");
 }
@@ -130,10 +128,17 @@ void FaceDetector::taskEntry(void* arg)
         // flips false and tears the stream down on the last consumer out.
         {
             stackchan::camera::CameraStreamGuard detector_active_guard;
+            uint32_t last_detect_ms = 0;
             while (self->_enabled.load(std::memory_order_acquire) &&
                    self->_running.load(std::memory_order_acquire)) {
-                self->processFrame();
-                vTaskDelay(pdMS_TO_TICKS(50));
+                bool detected = self->processFrame();
+                uint32_t now = GetHAL().millis();
+                if (detected) last_detect_ms = now;
+                // Fast TRACK cadence while a face was seen recently; slow SEARCH
+                // cadence otherwise. last_detect_ms starts at 0, so a fresh
+                // _enabled window begins in SEARCH until the first hit.
+                bool tracking = (now - last_detect_ms) < kTrackHoldMs;
+                vTaskDelay(pdMS_TO_TICKS(tracking ? kTrackIntervalMs : kSearchIntervalMs));
             }
         }
     }
@@ -142,16 +147,16 @@ void FaceDetector::taskEntry(void* arg)
     vTaskDelete(nullptr);
 }
 
-void FaceDetector::processFrame()
+bool FaceDetector::processFrame()
 {
     auto& arbiter = CameraArbiter::getInstance();
-    if (!arbiter.tryAcquireForDetection()) return;
+    if (!arbiter.tryAcquireForDetection()) return false;
 
     auto* camera = hal_bridge::board_get_camera();
     if (!camera) {
         ESP_LOGW(TAG, "Camera unavailable");
         arbiter.releaseForDetection();
-        return;
+        return false;
     }
 
     // Privacy LED guard is now held ONE LEVEL UP in taskEntry, scoped to
@@ -160,7 +165,7 @@ void FaceDetector::processFrame()
     if (!camera->StreamCaptures()) {
         ESP_LOGW(TAG, "StreamCaptures failed");
         arbiter.releaseForDetection();
-        return;
+        return false;
     }
 
     const uint8_t* frame_data = camera->GetFrameData();
@@ -171,14 +176,14 @@ void FaceDetector::processFrame()
     if (!frame_data || frame_w <= 0 || frame_h <= 0) {
         ESP_LOGW(TAG, "No frame data");
         arbiter.releaseForDetection();
-        return;
+        return false;
     }
 
     // Bail before the heavy YUV→RGB + inference if disable was requested
     // while we were waiting for the camera frame.
     if (!_enabled.load(std::memory_order_acquire)) {
         arbiter.releaseForDetection();
-        return;
+        return false;
     }
 
     // Map our V4L2 format to ESP-DL pix_type. The model's preprocessor
@@ -193,7 +198,7 @@ void FaceDetector::processFrame()
     } else {
         ESP_LOGW(TAG, "unsupported frame format 0x%08x", (unsigned)frame_fmt);
         arbiter.releaseForDetection();
-        return;
+        return false;
     }
 
     // Defaults (0.5/0.5) are too strict for real-world conditions
@@ -247,9 +252,11 @@ void FaceDetector::processFrame()
         // / `face_lost` events are emitted from the FaceTrackingModifier
         // (firmware/main/stackchan/modifiers/face_tracking.cpp); the
         // detector itself only writes the bbox to FaceDetectionResult.
-    } else {
-        result.write(false, 0, 0, 0, now);
+        return true;
     }
+
+    result.write(false, 0, 0, 0, now);
+    return false;
 }
 
 }  // namespace stackchan

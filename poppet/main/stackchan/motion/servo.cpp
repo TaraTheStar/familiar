@@ -38,6 +38,12 @@ void Servo::init()
     setTorqueEnabled(false);
 }
 
+// Settle window after the last motion command before auto-releasing torque.
+// The spring animation reporting done() means the command stream has reached
+// the target; this gives the servo a moment to physically settle before we cut
+// torque, replacing the old per-tick is_moving_impl() serial poll.
+static constexpr uint32_t kTorqueReleaseSettleMs = 250;
+
 void Servo::update()
 {
     // Keep update in at most 50Hz
@@ -50,21 +56,35 @@ void Servo::update()
     if (!_angle_anim.done()) {
         _angle_anim.updateWithDelta(0.02f);  // Fixed delta time for consistency
         set_angle_impl(static_cast<int>(_angle_anim.directValue()));
+        // A position write powers/holds the servo; track that locally so the
+        // rest branch knows torque is on without asking the servo over serial.
+        _torque_enabled = true;
+        _last_motion_ms = _last_tick;
+        return;
     }
 
     // Snap to target angle when animation ends
-    else if (_snap_to_target_on_rest) {
+    if (_snap_to_target_on_rest) {
         _snap_to_target_on_rest = false;
         set_angle_impl(_angle_anim.end);
+        _torque_enabled = true;
+        _last_motion_ms = _last_tick;
+        return;
     }
 
-    // Auto release torque on rest
-    else if (_auto_torque_release_enabled && !isMoving()) {
-        if (GetHAL().millis() - _last_torque_check_tick > 200) {
-            if (getTorqueEnabled()) {
-                setTorqueEnabled(false);
-            }
-            _last_torque_check_tick = GetHAL().millis();
+    // Auto release torque on rest.
+    //
+    // 2c: previously this branch called isMoving() (→ is_moving_impl() = a
+    // blocking ReadMove serial round-trip) every tick and getTorqueEnabled()
+    // (→ ReadToqueEnable) every 200 ms — i.e. ~50 Hz × 2 servos of UART
+    // traffic while the head sat perfectly still. That idle bus contention is
+    // what starved the audio tasks. We now drive release purely from local
+    // state: the spring animation being done() means commands have reached the
+    // target, so after a fixed settle window we drop torque exactly once using
+    // the cached flag. No serial traffic is issued while resting.
+    if (_auto_torque_release_enabled && _torque_enabled) {
+        if (_last_tick - _last_motion_ms > kTorqueReleaseSettleMs) {
+            setTorqueEnabled(false);  // updates _torque_enabled → one-shot
         }
     }
 }

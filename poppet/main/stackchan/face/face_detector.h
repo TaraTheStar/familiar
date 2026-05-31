@@ -24,13 +24,15 @@ public:
 private:
     FaceDetector() = default;
     static void taskEntry(void* arg);
-    void processFrame();
+    // Runs one detection pass. Returns true iff a face was detected this frame
+    // (false on no-face *and* on early-out when the camera/arbiter was busy).
+    // Drives the adaptive cadence in taskEntry.
+    bool processFrame();
 
     TaskHandle_t _task_handle = nullptr;
     std::atomic<bool> _enabled{false};
     std::atomic<bool> _running{false};
     SemaphoreHandle_t _stop_sem = nullptr;
-    uint8_t* _rgb_buffer = nullptr;
 };
 
 }  // namespace stackchan

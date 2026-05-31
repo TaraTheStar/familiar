@@ -5,25 +5,28 @@
 
 #include "SCSerial.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 
 static const char *TAG = "SCSerial";
 
+// IOTimeOut: per-read serial timeout in ms. A valid servo reply at 1 Mbaud is
+// sub-millisecond; 10 ms is ample margin while bounding how long a missed/slow
+// or unplugged-servo ACK can block the (now-blocking) read — at 100 ms a dead
+// servo could stall the update task long enough to trip task_wdt.
 SCSerial::SCSerial()
 {
-    IOTimeOut = 100;
+    IOTimeOut = 10;
     uart_num  = UART_NUM_MAX;
 }
 
 SCSerial::SCSerial(u8 End) : SCS(End)
 {
-    IOTimeOut = 100;
+    IOTimeOut = 10;
     uart_num  = UART_NUM_MAX;
 }
 
 SCSerial::SCSerial(u8 End, u8 Level) : SCS(End, Level)
 {
-    IOTimeOut = 100;
+    IOTimeOut = 10;
     uart_num  = UART_NUM_MAX;
 }
 
@@ -74,43 +77,42 @@ void SCSerial::end()
 
 int SCSerial::readSCS(unsigned char *nDat, int nLen)
 {
-    if (uart_num >= UART_NUM_MAX) {
+    if (uart_num >= UART_NUM_MAX || nLen <= 0) {
         return 0;
     }
 
-    int Size        = 0;
-    int64_t t_begin = esp_timer_get_time() / 1000;  // Convert to milliseconds
-    int64_t t_user;
+    // Blocking read: sleep on the UART driver's ISR-fed RX ring buffer until
+    // nLen bytes arrive or IOTimeOut elapses, instead of busy-polling at task
+    // priority. The previous implementation polled uart_get_buffered_data_len()
+    // in a loop whose only yield was vTaskDelay(1 / portTICK_PERIOD_MS) — but
+    // with CONFIG_FREERTOS_HZ=100 that integer-divides to vTaskDelay(0), a bare
+    // yield. On a missed/slow servo ACK it spun the full IOTimeOut at priority 5
+    // on Core 1, starving the opus codec task (priority 6, same core) and
+    // corrupting TTS playback. Blocking here frees the CPU while we wait.
+    // uart_read_bytes() returns the byte count actually read; callers treat a
+    // short read as an error (checksum/length mismatch).
+    const TickType_t timeout = pdMS_TO_TICKS(IOTimeOut);
 
-    while (1) {
-        size_t available = 0;
-        uart_get_buffered_data_len(uart_num, &available);
-
-        if (available > 0) {
-            unsigned char byte;
-            int len = uart_read_bytes(uart_num, &byte, 1, 0);
-            if (len > 0) {
-                if (nDat) {
-                    nDat[Size] = byte;
-                }
-                Size++;
-                t_begin = esp_timer_get_time() / 1000;
-            }
-        }
-
-        if (Size >= nLen) {
-            break;
-        }
-
-        t_user = (esp_timer_get_time() / 1000) - t_begin;
-        if (t_user > IOTimeOut) {
-            break;
-        }
-
-        vTaskDelay(1 / portTICK_PERIOD_MS);
+    if (nDat) {
+        int got = uart_read_bytes(uart_num, nDat, nLen, timeout);
+        return got < 0 ? 0 : got;
     }
 
-    return Size;
+    // No destination buffer — drain and discard nLen bytes.
+    unsigned char scratch[16];
+    int total = 0;
+    while (total < nLen) {
+        int want = nLen - total;
+        if (want > (int)sizeof(scratch)) {
+            want = sizeof(scratch);
+        }
+        int got = uart_read_bytes(uart_num, scratch, want, timeout);
+        if (got <= 0) {
+            break;
+        }
+        total += got;
+    }
+    return total;
 }
 
 int SCSerial::writeSCS(unsigned char *nDat, int nLen)
