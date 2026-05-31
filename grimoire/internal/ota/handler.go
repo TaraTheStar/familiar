@@ -23,7 +23,7 @@ import (
 // care about right now.
 type Config struct {
 	// WebSocketURL is the URL the device will open for the live session,
-	// e.g. "ws://192.0.2.10:9098/xiaozhi/v1/".
+	// e.g. "ws://192.0.2.10:9098/grimoire/".
 	WebSocketURL string
 
 	// FirmwareVersion is echoed back as the canonical version. Set to the

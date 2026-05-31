@@ -11,7 +11,7 @@
 //
 // Example:
 //
-//	v2client -url ws://192.0.2.10:9098/xiaozhi/v1/ -mic question.wav -out reply.wav -v
+//	v2client -url ws://192.0.2.10:9098/grimoire/ -mic question.wav -out reply.wav -v
 package main
 
 import (
@@ -31,7 +31,7 @@ import (
 
 func main() {
 	var (
-		url         = flag.String("url", "", "v2 WebSocket endpoint, e.g. ws://192.0.2.10:9098/xiaozhi/v1/")
+		url         = flag.String("url", "", "v2 WebSocket endpoint, e.g. ws://192.0.2.10:9098/grimoire/")
 		micWAV      = flag.String("mic", "", "16kHz mono 16-bit WAV to send as the user's turn (empty = silent turn)")
 		outWAV      = flag.String("out", "", "write the decoded server TTS to this WAV")
 		toolsFile   = flag.String("tools", "", "JSON file with an array of tool descriptors to answer tool_list with")

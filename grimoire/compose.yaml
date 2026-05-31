@@ -4,10 +4,11 @@
 #   podman-compose up -d
 #   podman-compose logs -f stackend
 #
-# Drop-in replacement target: stackend listens on port 9099 to match the
-# device's flashed CONFIG_OTA_URL (http://192.0.2.10:9099/xiaozhi/ota/),
-# so no firmware reflash is needed. The OTA endpoint hands back the WS URL
-# (-ws-url) the device then dials for the live session.
+# stackend listens on port 9099. The device is flashed (menuconfig
+# CONFIG_OTA_URL) to dial http://<LAN_IP>:9099/grimoire/ota/ on boot; that OTA
+# endpoint hands back the WS URL (-ws-url) the device then dials for the live
+# session. v2-only since the v1 protocol + the legacy /xiaozhi/ routes were
+# removed (WS3) — the device must be reflashed to /grimoire/ before connecting.
 #
 # To deploy: stop the old xiaozhi-server container bound to 9099, start this.
 
@@ -27,7 +28,7 @@ services:
     # (LLM_API_KEY) lives only in .env, never in this committed file.
     command:
       - "-addr=:9099"
-      - "-ws-url=ws://${LAN_IP}:9099/xiaozhi/"        # LAN URL the device dials (version-neutral v2 path)
+      - "-ws-url=ws://${LAN_IP}:9099/grimoire/"       # LAN WS URL advertised to the device
       - "-firmware-version=1.3.1"                       # device's current; suppresses OTA
       - "-log-level=info"
       # Use the container_name, not the service name: pinning container_name

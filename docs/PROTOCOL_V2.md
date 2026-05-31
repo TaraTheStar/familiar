@@ -288,11 +288,13 @@ followed by `abort`, and does **not** open a capture window. Pre-roll applies on
 ```
 
 > **Server contract:** grimoire acts on `abort` (cancels the in-flight reply; the open
-> utterance ends with `audio_cancel`, §4.4). It does **not** yet act on the
-> `wake_word_audio` pre-roll: the feature is off by default in firmware
-> (`CONFIG_SEND_WAKE_WORD_DATA=n`), so pre-roll frames are not expected; if sent before
-> `listen_start` they are currently dropped. The framing is fixed (above) so enabling it
-> later is a server change, not a protocol change.
+> utterance ends with `audio_cancel`, §4.4). It also honors `wake_word_audio` pre-roll: a
+> device that advertised the feature gets its audio window opened at a `wake` from idle, so
+> pre-roll binary frames sent before `listen_start` are buffered as turn audio (then
+> `listen_start` attaches the mode's endpoint detector and keeps the buffered pre-roll; the
+> server-VAD does not run over the pre-roll, so the wake tail can't self-endpoint). The feature
+> is still off by default in firmware (`CONFIG_SEND_WAKE_WORD_DATA=n`); a device that doesn't
+> advertise it, or a `wake` mid-window (a barge-in), gets the window at `listen_start` as before.
 
 ### 4.3 Speech recognition (server → device)
 
@@ -605,9 +607,13 @@ for `tool_list`:
 
 If present, server SHOULD skip `tool_list` calls. Saves a round-trip on session open.
 
-> **Server contract:** not yet honored — grimoire always issues `tool_list` and ignores
-> `tools_inline`. Wiring it is a pure optimization (one fewer round-trip) and changes no
-> observable tool behavior.
+> **Server contract:** honored. grimoire reads `client.tools_inline` from the hello and, when
+> it carries ≥1 usable (named) descriptor, registers that catalog and skips `tool_list`
+> discovery entirely. Belt-and-suspenders: if the inline list is present but unusable (empty
+> after filtering, or all-nameless), the server falls back to `tool_list` rather than run with
+> no device tools — it never ends up toolless because the device announced badly. A descriptor
+> with a name but a non-public permission is honored as a deliberate "expose nothing" and does
+> **not** trigger fallback. Pure optimization: identical observable tool behavior either way.
 
 ### 6.5 Reverse direction: server-exposed tools
 
@@ -781,7 +787,15 @@ Server implements BOTH protocols, selected by `Protocol-Version` header at WS up
 | 1 | v1 + v2 (parallel impls) | v1 only |
 | 2 | v1 + v2 | v2 added, defaulting to v1 |
 | 3 | v1 + v2 | v2 default |
-| 4 | v2 only | v2 only |
+| 4 | **v2 only** ✅ done 2026-05-30 (server) | v2 only |
+
+**Phase 4 reached server-side, 2026-05-30.** v1 is removed from the server: the v1 wire types,
+`Decode`, the `internal/mcp` package, the v1 `deviceOut`/decoder/tool-port (`wire_v1.go`,
+`tools_v1.go`), and the legacy `/xiaozhi/` route mounts are all deleted. The upgrade handler
+rejects any `Protocol-Version` other than empty or `2`, and routes mount under `/grimoire/`
+only. `package protocol` keeps just `AudioParams` + the OTA HTTP response types;
+`docs/PROTOCOL_V1.md` is retained for history. The device is reflashed to dial `/grimoire/`
+before reconnecting, so no `/xiaozhi/` compatibility window is kept.
 
 Estimated firmware change to add v2: ~1 week of work (mostly in
 `xiaozhi-esp32/main/protocols/` and the dispatcher in `application.cc`). Hardware

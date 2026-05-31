@@ -44,48 +44,8 @@ var updateGolden = flag.Bool("update", false, "update golden wire-frame fixtures
 // -update and review the diff — an unintended change is exactly what these
 // tests are meant to catch.
 
-// recordSession drives one client flow against a v1 session and returns the
-// ordered, normalized outbound frames. `flow` is the client side of the
-// exchange (it has already had ClientHello sent for it); it should send the
-// device→server messages that provoke the output under test. Reading stops
-// when the server goes idle for idleStop or closes the socket.
-func recordSession(t *testing.T, cfg Config, flow func(t *testing.T, ctx context.Context, conn *websocket.Conn)) []string {
-	t.Helper()
-
-	srv := httptest.NewServer(Handler(cfg))
-	defer srv.Close()
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "test done")
-
-	// Every v1 session opens with the client hello; send it for the flow so
-	// each fixture starts from the ServerHello reply.
-	mustWriteText(t, ctx, conn, mustJSON(t, protocol.ClientHello{
-		Type: "hello", Version: 1, Transport: "websocket",
-		AudioParams: &protocol.AudioParams{Format: "opus", SampleRate: 16000, Channels: 1, FrameDuration: 60},
-	}))
-
-	// Run the client side concurrently with the read collector so a flow can
-	// send mid-stream messages (e.g. listen:stop) while we drain output.
-	flowDone := make(chan struct{})
-	go func() {
-		defer close(flowDone)
-		flow(t, ctx, conn)
-	}()
-
-	frames := collectFrames(t, ctx, conn, 1500*time.Millisecond)
-	<-flowDone
-	return frames
-}
-
-// recordSessionV2 is recordSession's Protocol v2 sibling: it upgrades with the
+// recordSessionV2 records the Protocol v2 wire output of a client flow: it
+// upgrades with the
 // Protocol-Version: 2 header so the server binds the v2 seam, sends a v2 client
 // hello, then records the v2 wire output of the flow. v2 carries no session_id
 // and no MCP frames, so collectFrames needs no v2-specific normalization.
@@ -263,73 +223,6 @@ func sentenceStreamLLM(t *testing.T, deltas ...string) *httptest.Server {
 		}
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
-}
-
-// --- the golden flows ---------------------------------------------------
-
-// TestGoldenHandshake pins the ServerHello reply shape.
-func TestGoldenHandshake(t *testing.T) {
-	got := recordSession(t, Config{
-		TTSAudio:         protocol.AudioParams{SampleRate: 24000, FrameDuration: 60},
-		HandshakeTimeout: 2 * time.Second,
-	}, func(t *testing.T, ctx context.Context, conn *websocket.Conn) {
-		// Hello already sent by recordSession; nothing more to provoke.
-	})
-	assertGolden(t, "handshake", got)
-}
-
-// TestGoldenTurnMultiSentence pins the full server→device frame sequence for
-// a normal (non-exit) multi-sentence reply with no tool calls:
-//
-//	hello → stt → llm:thinking → llm:happy → tts:start →
-//	  (sentence_start + opus frames)×3 → tts:stop → llm:neutral
-func TestGoldenTurnMultiSentence(t *testing.T) {
-	kokoro := constantPCMKokoro(t, 2880) // 120ms @24kHz = exactly 2 frames/sentence
-	defer kokoro.Close()
-	llmServer := sentenceStreamLLM(t,
-		"Sentence", " one. ", "Sentence two", "! ", "And a final ", "fragment")
-	defer llmServer.Close()
-
-	got := recordSession(t, Config{
-		TTSAudio:         protocol.AudioParams{SampleRate: 24000, FrameDuration: 60},
-		MicAudio:         protocol.AudioParams{SampleRate: 16000, Channels: 1, FrameDuration: 60},
-		HandshakeTimeout: 2 * time.Second,
-		MCPInitTimeout:   200 * time.Millisecond,
-		Kokoro:           &tts.KokoroClient{BaseURL: kokoro.URL},
-		ASR:              &fakeASR{out: "what time is it"},
-		LLM:              &llm.Client{BaseURL: llmServer.URL, Model: "test-model"},
-		SystemPrompt:     "You are a test robot.",
-	}, func(t *testing.T, ctx context.Context, conn *websocket.Conn) {
-		mustWriteText(t, ctx, conn, mustJSON(t, protocol.Listen{Type: "listen", State: "start", Mode: "auto"}))
-		sendFakeAudioFrame(t, ctx, conn)
-		mustWriteText(t, ctx, conn, mustJSON(t, protocol.Listen{Type: "listen", State: "stop"}))
-	})
-	assertGolden(t, "turn_multi_sentence", got)
-}
-
-// TestGoldenTurnExitPhrase pins that an exit-phrase turn ends with a graceful
-// close after the reply: the device returns to idle on WS close (no
-// system/reboot). Locks the v1 farewell behavior.
-func TestGoldenTurnExitPhrase(t *testing.T) {
-	kokoro := constantPCMKokoro(t, 1440) // 60ms @24kHz = 1 frame
-	defer kokoro.Close()
-	llmServer := sentenceStreamLLM(t, "Goodbye!")
-	defer llmServer.Close()
-
-	got := recordSession(t, Config{
-		TTSAudio:         protocol.AudioParams{SampleRate: 24000, FrameDuration: 60},
-		MicAudio:         protocol.AudioParams{SampleRate: 16000, Channels: 1, FrameDuration: 60},
-		HandshakeTimeout: 2 * time.Second,
-		MCPInitTimeout:   200 * time.Millisecond,
-		Kokoro:           &tts.KokoroClient{BaseURL: kokoro.URL},
-		ASR:              &fakeASR{out: "goodbye"},
-		LLM:              &llm.Client{BaseURL: llmServer.URL, Model: "test-model"},
-	}, func(t *testing.T, ctx context.Context, conn *websocket.Conn) {
-		mustWriteText(t, ctx, conn, mustJSON(t, protocol.Listen{Type: "listen", State: "start", Mode: "auto"}))
-		sendFakeAudioFrame(t, ctx, conn)
-		mustWriteText(t, ctx, conn, mustJSON(t, protocol.Listen{Type: "listen", State: "stop"}))
-	})
-	assertGolden(t, "turn_exit_phrase", got)
 }
 
 // --- v2 golden flows ----------------------------------------------------

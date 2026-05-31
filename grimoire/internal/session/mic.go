@@ -22,6 +22,7 @@ func (s *Session) fireTurn(ctx context.Context, reason string) {
 		return // already fired this turn; ignore duplicate triggers
 	}
 	s.listening = false
+	s.prerollOpen = false
 	s.ep = nil
 	turn := s.takeMicTurn()
 	approxMS := 0

@@ -62,18 +62,24 @@ func (p *v2ToolPort) Discover(ctx context.Context) ([]toolDescriptor, error) {
 			return all, nil
 		}
 		for _, d := range tl.Result.Tools {
-			all = append(all, toolDescriptor{
-				Name:        d.Name,
-				Description: d.Description,
-				Schema:      d.ArgsSchema,
-				Permission:  d.Permission,
-			})
+			all = append(all, toolDescriptorFromV2(d))
 		}
 		if tl.Result.NextCursor == "" {
 			return all, nil
 		}
 		next := tl.Result.NextCursor
 		cursor = &next
+	}
+}
+
+// toolDescriptorFromV2 normalizes one v2 wire descriptor (tool_list result or
+// the hello's tools_inline, §6.4) to the protocol-agnostic internal form.
+func toolDescriptorFromV2(d protov2.ToolDescriptor) toolDescriptor {
+	return toolDescriptor{
+		Name:        d.Name,
+		Description: d.Description,
+		Schema:      d.ArgsSchema,
+		Permission:  d.Permission,
 	}
 }
 

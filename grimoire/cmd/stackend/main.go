@@ -5,8 +5,8 @@
 // Milestone 1 scope:
 //
 //   - HTTP /ota endpoint: returns WebSocket URL + server time
-//   - WebSocket /xiaozhi/v1/: accepts device connections, performs hello
-//     handshake, logs subsequent messages
+//   - WebSocket /grimoire/: accepts device connections, performs the hello
+//     handshake, runs the voice loop (v2-only since the v1 removal — WS3)
 //
 // No ASR/LLM/TTS yet — those come in subsequent milestones.
 package main
@@ -35,7 +35,7 @@ import (
 func main() {
 	var (
 		addr           = flag.String("addr", ":9098", "listen address (host:port)")
-		wsURL          = flag.String("ws-url", "", "WebSocket URL to advertise to devices (e.g. ws://192.0.2.10:9098/xiaozhi/)")
+		wsURL          = flag.String("ws-url", "", "WebSocket URL to advertise to devices (e.g. ws://192.0.2.10:9098/grimoire/)")
 		fwVer          = flag.String("firmware-version", "1.3.1", "firmware version echoed in /ota (set to device's current to suppress OTA)")
 		logLevel       = flag.String("log-level", "info", "debug|info|warn|error")
 		kokoroURL      = flag.String("kokoro-url", "", "Kokoro fastapi base URL (e.g. http://kokoro:8880); empty disables TTS")
@@ -98,7 +98,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	if *wsURL == "" {
-		logger.Error("-ws-url is required (e.g. ws://192.0.2.10:9098/xiaozhi/)")
+		logger.Error("-ws-url is required (e.g. ws://192.0.2.10:9098/grimoire/)")
 		os.Exit(2)
 	}
 
@@ -112,16 +112,9 @@ func main() {
 			return now.UnixMilli(), off / 60
 		},
 	}, logger.With("component", "ota"))
-	// The flashed firmware (sdkconfig: CONFIG_OTA_URL) dials /xiaozhi/ota/.
-	// Mount /ota/ too so either discovery path works without a reflash.
-	mux.HandleFunc("/xiaozhi/ota/", otaHandler)
+	// Brand-neutral OTA aliases (no /<brand>/ prefix), kept so a device flashed
+	// with a bare CONFIG_OTA_URL=.../ota works regardless of brand.
 	mux.HandleFunc("/ota/", otaHandler)
-	// Tolerate the no-trailing-slash form too. A device flashed with
-	// CONFIG_OTA_URL=".../xiaozhi/ota" (no slash) would otherwise hit the
-	// subtree-redirect to "/xiaozhi/ota/" (a 307 the ESP OTA client won't
-	// follow). These exact patterns out-rank the "/xiaozhi/" session subtree, so
-	// the bare path returns the OTA body directly instead of redirecting.
-	mux.HandleFunc("/xiaozhi/ota", otaHandler)
 	mux.HandleFunc("/ota", otaHandler)
 	// Protocol v2 discovery (PROTOCOL_V2 §2.1): the lean {ws_url, firmware?}
 	// shape. v1 firmware keeps using /ota; v2 firmware uses /discover.
@@ -212,12 +205,12 @@ func main() {
 		TimeLocation:       timeLocation,
 		Logger:             logger.With("component", "session"),
 	})
-	// The session is dispatched by the Protocol-Version header, not the path, so
-	// both v1 and v2 are served on either mount. /xiaozhi/ is the version-neutral
-	// canonical path (advertised to v2 devices); /xiaozhi/v1/ stays mounted for
-	// devices that cached it.
-	mux.HandleFunc("/xiaozhi/", sessionHandler)
-	mux.HandleFunc("/xiaozhi/v1/", sessionHandler)
+	// Mount the OTA + session routes under the /grimoire/ brand. The legacy
+	// /xiaozhi/ mount was dropped with the v1 protocol removal (WS3): the device
+	// is reflashed to dial /grimoire/ota/ before it comes back online, so no
+	// compatibility alias is needed. Brand-neutral /ota, /ota/, /discover are
+	// registered above.
+	mountBrand(mux, "grimoire", otaHandler, sessionHandler)
 
 	// Vision callback: device POSTs camera captures here when the LLM
 	// calls self.camera.take_photo. Requires a multimodal LLM (we reuse
@@ -271,6 +264,26 @@ func main() {
 		logger.Warn("shutdown error", "err", err)
 	}
 	logger.Info("stopped")
+}
+
+// mountBrand registers the OTA + WebSocket-session routes for the given brand
+// prefix (e.g. "grimoire") on mux:
+//
+//   - /<brand>/ota/  + bare /<brand>/ota : the flashed CONFIG_OTA_URL target.
+//     The bare (no-slash) form is registered explicitly because a device flashed
+//     with ".../<brand>/ota" (no slash) would otherwise hit ServeMux's subtree
+//     redirect to ".../<brand>/ota/" — a 307 the ESP OTA client won't follow.
+//     The exact patterns out-rank the "/<brand>/" session subtree, so the bare
+//     path returns the OTA body directly instead of redirecting.
+//   - /<brand>/ : the WebSocket session (v2-only since WS3; the upgrade is
+//     gated on the Protocol-Version header in session.Handler).
+//
+// The brand-neutral /ota, /ota/, and /discover routes are registered once by the
+// caller (not per brand).
+func mountBrand(mux *http.ServeMux, brand string, otaHandler, sessionHandler http.HandlerFunc) {
+	mux.HandleFunc("/"+brand+"/ota/", otaHandler)
+	mux.HandleFunc("/"+brand+"/ota", otaHandler)
+	mux.HandleFunc("/"+brand+"/", sessionHandler)
 }
 
 func parseLevel(s string) slog.Level {

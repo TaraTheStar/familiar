@@ -114,28 +114,6 @@ func TestClockSync(t *testing.T) {
 	}
 }
 
-func TestParseProtocolVersion(t *testing.T) {
-	cases := []struct {
-		header  string
-		wantVer int
-		wantOK  bool
-	}{
-		{"", 1, true}, // omitted header defaults to v1
-		{"1", 1, true},
-		{"2", 2, true},
-		{" 2 ", 2, true}, // tolerate surrounding whitespace
-		{"3", 0, false},
-		{"v2", 0, false},
-		{"abc", 0, false},
-	}
-	for _, c := range cases {
-		gotVer, gotOK := parseProtocolVersion(c.header)
-		if gotVer != c.wantVer || gotOK != c.wantOK {
-			t.Errorf("parseProtocolVersion(%q) = (%d,%v), want (%d,%v)", c.header, gotVer, gotOK, c.wantVer, c.wantOK)
-		}
-	}
-}
-
 // TestUpgradeRejectsUnknownVersion proves the dispatcher fails closed: an
 // unsupported Protocol-Version is rejected with HTTP 426 before the WebSocket
 // upgrade, rather than upgrading into a protocol the server can't speak.

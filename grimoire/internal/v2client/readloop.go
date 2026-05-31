@@ -173,11 +173,18 @@ func (c *client) answerToolList(ctx context.Context, req protov2.ToolList) error
 	c.mu.Lock()
 	c.res.ToolListReqs++
 	c.mu.Unlock()
-	c.logf("tool_list request id=%d → returning %d tools", req.ID, len(c.cfg.Tools))
+	// Effective catalog: a device that announced inline (§6.4) but is still
+	// asked tool_list should answer with the same set, so fall back to
+	// ToolsInline when Tools is unset.
+	catalog := c.cfg.Tools
+	if len(catalog) == 0 {
+		catalog = c.cfg.ToolsInline
+	}
+	c.logf("tool_list request id=%d → returning %d tools", req.ID, len(catalog))
 	return c.writeJSON(ctx, protov2.ToolList{
 		Type:   "tool_list",
 		ID:     req.ID,
-		Result: &protov2.ToolListResult{Tools: c.cfg.Tools},
+		Result: &protov2.ToolListResult{Tools: catalog},
 	})
 }
 

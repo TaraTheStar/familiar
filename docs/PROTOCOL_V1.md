@@ -3,9 +3,12 @@
 The wire contract between the StackChan device ([poppet](../poppet)) and the
 self-hosted backend ([grimoire](../grimoire)) **as it ships today**: every HTTP
 endpoint and WebSocket message the firmware expects or emits. grimoire
-implements this; poppet speaks it. The forward-looking redesign that fixes v1's
-warts lives in [PROTOCOL_V2.md](PROTOCOL_V2.md) — still a draft, not yet in
-either codebase (see its "Status").
+implements this; poppet speaks it. **REMOVED FROM THE SERVER (2026-05-30).** This documents the v1 wire format the
+firmware originally spoke; it is retained for historical reference only. The live
+protocol is [PROTOCOL_V2.md](PROTOCOL_V2.md). The server no longer implements v1 at
+all — the v1 wire types, the MCP-over-WS tool path, and the legacy `/xiaozhi/` route
+mounts were deleted in migration Phase 5 (PROTOCOL_V2 §10.2). A device must speak v2
+on `/grimoire/`.
 
 Source of truth (device side): the vendored xiaozhi-esp32 tree fetched into
 `poppet/xiaozhi-esp32/main/` —

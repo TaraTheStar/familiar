@@ -30,7 +30,7 @@ import (
 
 // Config drives a single reference turn.
 type Config struct {
-	// URL is the v2 WebSocket endpoint, e.g. ws://192.0.2.10:9098/xiaozhi/v1/.
+	// URL is the v2 WebSocket endpoint, e.g. ws://192.0.2.10:9098/grimoire/.
 	URL string
 
 	// MicPCM is the user utterance as 16-bit little-endian mono PCM at MicRate.
@@ -38,9 +38,21 @@ type Config struct {
 	MicPCM  []byte
 	MicRate int // mic sample rate (Hz); 0 → 16000
 
+	// Preroll, when non-empty, is wake_word_audio pre-roll (§4.2): the client
+	// advertises the wake_word_audio feature, sends a `wake`, then streams this
+	// PCM as binary frames before listen_start so the server's window opens at
+	// wake. Same format as MicPCM. Empty = no pre-roll (window opens at
+	// listen_start, the default).
+	Preroll []byte
+
 	// Tools is the device tool catalog the client answers tool_list discovery
 	// with. Empty means the device exposes no tools (a valid, common case).
 	Tools []protov2.ToolDescriptor
+	// ToolsInline, when set, is announced in the hello's client.tools_inline
+	// (§6.4) so the server can skip tool_list discovery. The client still
+	// answers a tool_list if one arrives anyway (using ToolsInline as the
+	// catalog when Tools is empty), so a non-skipping server stays functional.
+	ToolsInline []protov2.ToolDescriptor
 	// ToolResults are canned results keyed by tool name, returned for tool_call.
 	// A tool not present here returns JSON `true` ("ok").
 	ToolResults map[string]json.RawMessage
@@ -179,17 +191,23 @@ func (c *client) hello(ctx context.Context) error {
 		micRate = 16000
 	}
 	c.nextID++
+	// "tools" = device supports first-class tool discovery/calls. (v1's "mcp"
+	// token is retired in v2 — there is no JSON-RPC envelope here.) Advertise
+	// wake_word_audio when a pre-roll is configured so the server opens the
+	// audio window at wake (§4.2).
+	features := []string{"tools"}
+	if len(c.cfg.Preroll) > 0 {
+		features = append(features, "wake_word_audio")
+	}
 	hello := protov2.ClientHello{
 		Type:   "hello",
 		ID:     c.nextID,
-		Client: protov2.ClientInfo{Name: "v2client", Version: "0.1.0"},
+		Client: protov2.ClientInfo{Name: "v2client", Version: "0.1.0", ToolsInline: c.cfg.ToolsInline},
 		Audio: protov2.AudioConfig{
 			In:  protov2.AudioStream{Codec: "opus", Rate: micRate, Channels: 1, FrameMS: 60},
 			Out: protov2.AudioStream{Codec: "opus", Rate: 24000, Channels: 1, FrameMS: 60},
 		},
-		// "tools" = device supports first-class tool discovery/calls. (v1's "mcp"
-		// token is retired in v2 — there is no JSON-RPC envelope here.)
-		Features: []string{"tools"},
+		Features: features,
 	}
 	if err := c.writeJSON(ctx, hello); err != nil {
 		return fmt.Errorf("v2client: send hello: %w", err)
@@ -263,6 +281,19 @@ func serverVersion(sh protov2.ServerHello) string {
 // Opus frames, listen_stop. With MicPCM empty it still opens/closes the window
 // (a silent turn), which is enough to exercise the handshake.
 func (c *client) sendTurn(ctx context.Context) error {
+	// wake_word_audio pre-roll (§4.2): announce wake, then stream the buffered
+	// pre-roll as binary frames before listen_start, so the server opens the
+	// turn's audio window at wake and the pre-roll counts as turn audio.
+	if len(c.cfg.Preroll) > 0 {
+		if err := c.writeJSON(ctx, protov2.Wake{Type: "wake", Phrase: "hi_stackchan", Score: 0.9}); err != nil {
+			return fmt.Errorf("v2client: wake: %w", err)
+		}
+		pre, err := c.streamPCM(ctx, c.cfg.Preroll)
+		if err != nil {
+			return fmt.Errorf("v2client: preroll: %w", err)
+		}
+		c.logf("sent %d pre-roll frames", pre)
+	}
 	if err := c.writeJSON(ctx, protov2.ListenStart{Type: "listen_start", Mode: "auto"}); err != nil {
 		return fmt.Errorf("v2client: listen_start: %w", err)
 	}
@@ -292,6 +323,26 @@ func (c *client) sendTurn(ctx context.Context) error {
 	}
 	c.logf("sent turn: %d mic frames", frames)
 	return nil
+}
+
+// streamPCM encodes pcm to Opus and writes each frame as a binary WS frame,
+// returning the frame count. Shared by the pre-roll and live-mic paths.
+func (c *client) streamPCM(ctx context.Context, pcm []byte) (int, error) {
+	framer := audio.NewPCMFramer(byteReader(pcm), c.enc.SamplesPerFrame())
+	n := 0
+	for framer.Next() {
+		pkt, err := c.enc.Encode(framer.Frame())
+		if err != nil {
+			return n, fmt.Errorf("encode frame: %w", err)
+		}
+		out := make([]byte, len(pkt)) // copy: Encode reuses its scratch buffer
+		copy(out, pkt)
+		if err := c.conn.Write(ctx, websocket.MessageBinary, out); err != nil {
+			return n, fmt.Errorf("send frame: %w", err)
+		}
+		n++
+	}
+	return n, framer.Err()
 }
 
 func (c *client) creditBatch() int {

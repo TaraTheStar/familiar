@@ -55,26 +55,59 @@ func (s *Session) initTools(ctx context.Context) {
 	if s.toolPort == nil {
 		return
 	}
+
+	// Fast path (PROTOCOL_V2 §6.4 tools_inline): the device announced its
+	// catalog in the hello, so register it and skip the tool_list round-trip.
+	// Belt-and-suspenders: only take this path if ≥1 descriptor is structurally
+	// usable (has a name). An inline list that is empty-after-filtering or all
+	// nameless garbage falls through to tool_list discovery rather than leaving
+	// the session toolless. (All-non-public-but-named inline is a deliberate
+	// "expose nothing" and is honored — it does NOT fall back.)
+	if len(s.inlineTools) > 0 {
+		named := 0
+		for _, d := range s.inlineTools {
+			if d.Name != "" {
+				named++
+			}
+		}
+		if named > 0 {
+			exposed := s.registerTools(s.inlineTools)
+			s.log.Info("tools ready", "count", exposed, "announced", len(s.inlineTools),
+				"source", "tools_inline")
+			return
+		}
+		s.log.Warn("tools_inline announced but no usable descriptors; falling back to tool_list",
+			"announced", len(s.inlineTools))
+	}
+
 	dctx, cancel := context.WithTimeout(ctx, s.cfg.MCPInitTimeout)
 	defer cancel()
 
 	descs, err := s.toolPort.Discover(dctx)
 	if err != nil {
-		s.log.Warn("tool discovery failed; running without device tools",
-			"err", err, "protocol", s.protocolVersion)
+		s.log.Warn("tool discovery failed; running without device tools", "err", err)
 		return
 	}
+	exposed := s.registerTools(descs)
+	s.log.Info("tools ready", "count", exposed, "discovered", len(descs),
+		"source", "tool_list")
+}
 
+// registerTools converts descriptors to the llm.Tool form the LLM consumes,
+// plus a name index, and installs both as the session's catalog. Returns the
+// number exposed to the LLM. A descriptor is skipped if it has no name
+// (malformed) or its permission isn't LLM-exposable. Shared by the tools_inline
+// fast path and tool_list discovery.
+func (s *Session) registerTools(descs []toolDescriptor) (exposed int) {
 	tools := make([]llm.Tool, 0, len(descs))
 	byName := make(map[string]toolDescriptor, len(descs))
-	skipped := 0
 	for _, d := range descs {
 		// Only public tools are exposed to the LLM (PROTOCOL_V2 §6.1): user_only
 		// is for explicit admin operations and system_only is server-internal.
 		// v1 MCP descriptors carry no permission (the device already filtered
-		// user_only in ListTools), so "" counts as public.
-		if !exposedToLLM(d.Permission) {
-			skipped++
+		// user_only in ListTools), so "" counts as public. A nameless descriptor
+		// is unusable (can't be called) and is dropped.
+		if d.Name == "" || !exposedToLLM(d.Permission) {
 			continue
 		}
 		tools = append(tools, llm.Tool{
@@ -91,8 +124,7 @@ func (s *Session) initTools(ctx context.Context) {
 	s.tools = tools
 	s.toolByName = byName
 	s.toolsMu.Unlock()
-
-	s.log.Info("tools ready", "count", len(tools), "skipped_non_public", skipped, "protocol", s.protocolVersion)
+	return len(tools)
 }
 
 // exposedToLLM reports whether a tool of the given permission may be advertised
