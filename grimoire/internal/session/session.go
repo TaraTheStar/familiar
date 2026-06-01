@@ -78,6 +78,15 @@ type Config struct {
 	// and the turn fizzles.
 	ASR ASR
 
+	// ASRStreaming enables incremental transcripts (PROTOCOL_V2 §4.3): while a
+	// listen window is open the server periodically re-transcribes the growing
+	// mic buffer and emits transcript{final:false} partials, then the turn's
+	// authoritative result with final:true. Off by default — whisper is batch
+	// (one blocking whisper_full per pass under a global mutex), so each partial
+	// is real re-inference; tolerable on a single-device LAN box, opt-in only.
+	// Ignored when ASR is nil.
+	ASRStreaming bool
+
 	// LLM is the streaming chat-completions client. nil → LLM step is
 	// skipped.
 	LLM *llm.Client
@@ -230,14 +239,15 @@ func Handler(cfg Config) http.HandlerFunc {
 		maxBytes := cfg.MicAudio.SampleRate * cfg.MicAudio.Channels * 2 * cfg.MaxUtteranceMS / 1000
 
 		s := &Session{
-			conn:      conn,
-			cfg:       cfg,
-			log:       log,
-			closed:    make(chan struct{}),
-			encoder:   enc,
-			decoder:   dec,
-			micBufMax: maxBytes,
-			micBuf:    make([]byte, 0, maxBytes),
+			conn:                 conn,
+			cfg:                  cfg,
+			log:                  log,
+			closed:               make(chan struct{}),
+			encoder:              enc,
+			decoder:              dec,
+			micBufMax:            maxBytes,
+			micBuf:               make([]byte, 0, maxBytes),
+			partialIntervalBytes: cfg.MicAudio.SampleRate * cfg.MicAudio.Channels * 2 * asrPartialIntervalMS / 1000,
 		}
 		s.localTools, s.localHandlers = s.buildLocalTools()
 		s.run(ctx)
@@ -272,6 +282,19 @@ type Session struct {
 	// continuously and never sends listen:stop itself). nil in manual mode,
 	// where the device sends listen:stop on its own.
 	ep *endpointer
+
+	// Streaming-ASR (PROTOCOL_V2 §4.3) partial-transcription state, all read-loop
+	// owned except the two atomics the worker touches. partialIntervalBytes is the
+	// debounce: a new partial is kicked only after this many fresh mic bytes since
+	// the last one. lastPartialBytes is the micBuf length at the last kick, reset
+	// to 0 at each window start. partialBusy caps it to one re-inference in flight.
+	// partialGen is bumped when a turn fires so a partial whose inference finishes
+	// after the authoritative final:true transcript is suppressed instead of
+	// racing it onto the wire.
+	partialIntervalBytes int
+	lastPartialBytes     int
+	partialBusy          atomic.Bool
+	partialGen           atomic.Int64
 
 	// wakeWordAudio records that the device advertised the wake_word_audio
 	// feature in its hello (PROTOCOL_V2 §4.2): a wake from idle opens the turn's
@@ -577,7 +600,54 @@ func (s *Session) armListen() {
 	s.micDropped = false
 	s.listening = true
 	s.prerollOpen = false
+	s.lastPartialBytes = 0 // restart the streaming-ASR debounce for the new window
 	s.armEndpointer()
+}
+
+// asrPartialIntervalMS is how much fresh mic audio must accumulate before the
+// streaming-ASR worker kicks another partial re-transcription (PROTOCOL_V2 §4.3).
+// ~700ms balances caption responsiveness against whisper re-inference cost.
+const asrPartialIntervalMS = 700
+
+// maybeStreamPartial kicks an incremental ASR pass over the mic buffer so far,
+// emitting a transcript{final:false} partial (PROTOCOL_V2 §4.3). Read-loop
+// goroutine only; the actual whisper inference runs on a worker so it never
+// blocks frame intake. No-op unless streaming is enabled and we're listening.
+// It debounces on accumulated bytes and allows only one re-inference in flight,
+// and tags the worker with the current partialGen so a partial that finishes
+// after the turn fired (its authoritative final transcript already sent) is
+// dropped rather than racing onto the wire.
+func (s *Session) maybeStreamPartial(ctx context.Context) {
+	if !s.cfg.ASRStreaming || !s.listening || s.cfg.ASR == nil {
+		return
+	}
+	if len(s.micBuf)-s.lastPartialBytes < s.partialIntervalBytes {
+		return
+	}
+	if !s.partialBusy.CompareAndSwap(false, true) {
+		return // a re-inference is already running; the next frame retries
+	}
+	s.lastPartialBytes = len(s.micBuf)
+	gen := s.partialGen.Load()
+	samples := bytesToInt16(s.micBuf) // copy: the worker must not touch micBuf
+	go func() {
+		defer s.partialBusy.Store(false)
+		text, err := s.cfg.ASR.Transcribe(samples)
+		if err != nil {
+			s.log.Debug("turn: partial ASR failed", "err", err)
+			return
+		}
+		text = filterASRArtifacts(text)
+		if text == "" {
+			return
+		}
+		if s.partialGen.Load() != gen {
+			return // turn already fired; the final:true transcript supersedes this
+		}
+		if err := s.out.Transcript(ctx, text, false); err != nil {
+			s.log.Debug("turn: send partial transcript failed", "err", err)
+		}
+	}()
 }
 
 // armEndpointer builds (auto mode) or clears (manual mode) the server-side
@@ -642,6 +712,10 @@ func (s *Session) onAudioFrame(ctx context.Context, opusBytes []byte) {
 			s.fireTurn(ctx, "server-vad")
 		}
 	}
+	// Streaming ASR: re-transcribe the growing buffer and emit a partial. No-op
+	// if the frame just fired the turn (listening is now false) or streaming is
+	// off. Runs the inference on a worker, so it never stalls frame intake.
+	s.maybeStreamPartial(ctx)
 }
 
 func (s *Session) dispatchText(ctx context.Context, data []byte) {
@@ -694,6 +768,7 @@ func (s *Session) dispatchText(ctx context.Context, data []byte) {
 			s.listening = true
 			s.prerollOpen = true
 			s.ep = nil
+			s.lastPartialBytes = 0 // restart the streaming-ASR debounce
 			s.rearm.Store(false)
 		}
 	case evAbort:

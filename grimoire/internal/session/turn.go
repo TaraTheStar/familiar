@@ -84,7 +84,7 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	}
 	s.log.Info("turn: transcript", "text", transcript)
 
-	if err := s.out.Transcript(ctx, transcript); err != nil {
+	if err := s.out.Transcript(ctx, transcript, true); err != nil {
 		s.log.Warn("turn: send transcript failed", "err", err)
 	}
 

@@ -74,10 +74,12 @@ func newV2Out(conn *websocket.Conn, encoder *audio.Encoder, log *slog.Logger, in
 	return o
 }
 
-// Transcript sends the ASR result (display-only). Final is always true until a
-// streaming ASR exists (§11 Q6).
-func (o *v2Out) Transcript(ctx context.Context, text string) error {
-	return writeJSON(ctx, o.conn, protov2.Transcript{Type: "transcript", Text: text, Final: true})
+// Transcript sends the ASR result (display-only). final=false is an incremental
+// partial emitted while the user is still speaking (streaming ASR, §4.3, §11 Q6);
+// the turn sends the authoritative result once with final=true. With streaming
+// disabled only the single final=true transcript is ever sent.
+func (o *v2Out) Transcript(ctx context.Context, text string, final bool) error {
+	return writeJSON(ctx, o.conn, protov2.Transcript{Type: "transcript", Text: text, Final: final})
 }
 
 // Display drives the avatar. Unlike v1, v2 carries both emotion and status.

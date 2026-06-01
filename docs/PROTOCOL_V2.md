@@ -306,6 +306,19 @@ followed by `abort`, and does **not** open a capture window. Pre-roll applies on
 
 Display-only on device. Drives the "thinking" emotion.
 
+`final: false` is an **incremental partial** emitted while the user is still
+speaking; `final: true` is the authoritative result for the turn. The device
+shows the latest `text` and may treat `final: true` as "transcript settled."
+
+> **Server contract:** *honored (opt-in).* When streaming is enabled
+> (`-asr-streaming`), grimoire periodically re-transcribes the growing mic buffer
+> during the listen window and sends `final: false` partials, then exactly one
+> `final: true` at turn end. whisper.cpp is batch, so a partial is a full
+> re-inference of the buffer-so-far (one in flight at a time, ~700ms debounce);
+> a partial whose inference finishes after the turn has fired is dropped, never
+> sent after the `final: true`. With streaming off (the default) the server
+> sends only the single `final: true` transcript per turn.
+
 ### 4.4 Audio playback / captions (server → device)
 
 **Audio begin** — server is about to stream Opus frames:
@@ -833,10 +846,12 @@ in the normative sections above; this section records the outcome and rationale.
    future server-side adapter, not part of v2. Build it later if we want to expose
    external MCP tools to the LLM.
 
-6. **Streaming transcripts? → `final: true` always for now.** whisper.cpp is batch (it
-   transcribes only after the turn endpoints). The `transcript.final` field stays in the
-   schema for forward compatibility, but the server always sends `final: true` until a
-   streaming ASR is in place (§4.3).
+6. **Streaming transcripts? → implemented (opt-in).** whisper.cpp is batch, so streaming is
+   done by periodic re-transcription of the growing mic buffer (not token-level streaming):
+   with `-asr-streaming` on, the server emits `final: false` partials during the listen
+   window, then one `final: true` at turn end. Off by default (each partial is a full
+   re-inference). See §4.3 "Server contract." A token-streaming ASR could later drop in
+   behind the same wire shape.
 
 7. **Should `display` updates be batched? → Allowed, not required.** Both fields are
    independently optional (§4.5); senders SHOULD combine `emotion` and `status` when both

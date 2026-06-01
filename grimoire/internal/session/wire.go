@@ -40,7 +40,11 @@ import (
 // the spec mandates (§4.4, Q2), emitting the final caption at SpeakEnd. The
 // loop stays ignorant of that difference.
 type deviceOut interface {
-	Transcript(ctx context.Context, text string) error
+	// Transcript sends an ASR result for display. final=false marks an
+	// incremental partial emitted mid-utterance (streaming ASR, §4.3); the
+	// authoritative result is sent once with final=true. With streaming off the
+	// loop only ever sends the single final=true transcript.
+	Transcript(ctx context.Context, text string, final bool) error
 	Display(ctx context.Context, emotion, status string) error
 	SpeakBegin(ctx context.Context) error
 	Caption(ctx context.Context, segment string) error

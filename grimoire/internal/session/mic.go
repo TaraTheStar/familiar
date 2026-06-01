@@ -24,6 +24,10 @@ func (s *Session) fireTurn(ctx context.Context, reason string) {
 	s.listening = false
 	s.prerollOpen = false
 	s.ep = nil
+	// Invalidate any in-flight streaming-ASR partial: the authoritative
+	// final:true transcript for this turn is about to be produced, so a partial
+	// that finishes its inference after this point must not reach the wire.
+	s.partialGen.Add(1)
 	turn := s.takeMicTurn()
 	approxMS := 0
 	if s.cfg.MicAudio.SampleRate > 0 {

@@ -44,6 +44,7 @@ func main() {
 		kokoroLang     = flag.String("kokoro-lang", "a", "Kokoro lang_code (a=American English)")
 		whisperModel   = flag.String("whisper-model", "", "Path to ggml whisper model (.bin); empty disables ASR (use -hardcoded-reply instead)")
 		whisperThreads = flag.Int("whisper-threads", 0, "Whisper inference thread count (0=NumCPU)")
+		asrStreaming   = flag.Bool("asr-streaming", false, "Emit incremental transcript{final:false} partials while the user speaks (re-runs whisper on the growing buffer; off=single final transcript per turn)")
 		llmURL         = flag.String("llm-url", "", "OpenAI-compatible LLM endpoint (e.g. http://192.0.2.20:8080); empty disables LLM")
 		llmModel       = flag.String("llm-model", "", "LLM model name as registered with llama-swap (e.g. gemma4-26B-A4B)")
 		llmAPIKey      = flag.String("llm-api-key", "", "Bearer token for the LLM endpoint")
@@ -185,6 +186,7 @@ func main() {
 		ReadIdleTimeout:  120 * time.Second,
 		Kokoro:           kokoro,
 		ASR:              whisper,
+		ASRStreaming:     *asrStreaming,
 		LLM:              llmClient,
 		SystemPrompt:     sysPrompt,
 		VisionURL:        *visionURL,

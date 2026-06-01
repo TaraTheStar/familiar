@@ -33,8 +33,12 @@ func (r *recordingOut) record(s string) {
 	r.mu.Unlock()
 }
 
-func (r *recordingOut) Transcript(_ context.Context, text string) error {
-	r.record("Transcript " + text)
+func (r *recordingOut) Transcript(_ context.Context, text string, final bool) error {
+	if final {
+		r.record("Transcript " + text)
+	} else {
+		r.record("TranscriptPartial " + text)
+	}
 	return nil
 }
 
