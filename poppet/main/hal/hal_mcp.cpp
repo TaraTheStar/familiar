@@ -8,6 +8,7 @@
 #include <mcp_server.h>
 #include <stackchan/stackchan.h>
 #include <stackchan/modes/state_manager.h>
+#include <stackchan/avatar/skins/familiar/familiar_registry.h>
 #include <hal/board/hal_bridge.h>
 #include <apps/common/common.h>
 
@@ -151,6 +152,23 @@ void Hal::xiaozhi_mcp_init()
             mclog::tagInfo(_tag, "set_state: {}", s);
             LvglLockGuard lock;
             sm->setState(out);
+            return true;
+        });
+
+    mclog::tagInfo(_tag, "add avatar.set_familiar tool");
+    mcp_server.AddTool(
+        "self.avatar.set_familiar",
+        "Change Dotty's on-screen character (the 'familiar'). Valid: \"default\" (the "
+        "built-in face) or \"cat\". The choice persists across reboots. Use when the user "
+        "asks to look like / become a specific familiar.",
+        PropertyList({Property("familiar", kPropertyTypeString, std::string("default"))}),
+        [this](const PropertyList& properties) -> ReturnValue {
+            std::string name = properties["familiar"].value<std::string>();
+            if (!stackchan::avatar::applyFamiliar(name)) {
+                mclog::tagWarn(_tag, "set_familiar: invalid familiar {}", name);
+                return false;
+            }
+            mclog::tagInfo(_tag, "set_familiar: {}", name);
             return true;
         });
 

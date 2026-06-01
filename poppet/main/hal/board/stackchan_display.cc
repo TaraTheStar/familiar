@@ -18,6 +18,7 @@
 #include <stackchan/face/face_detector.h>
 #include <stackchan/sound_localizer.h>
 #include <stackchan/avatar/decorators/decorators.h>
+#include <stackchan/avatar/skins/familiar/familiar_registry.h>
 #include <stackchan/modes/state_manager.h>
 #include "application.h"
 #include <assets/lang_config.h>
@@ -293,14 +294,10 @@ void StackChanAvatarDisplay::SetupUI()
 
     ESP_LOGI(TAG, "Creating Stack-chan Avatar...");
 
-    auto avatar = std::make_unique<DefaultAvatar>();
-    avatar->init(lv_screen_active());
-    avatar->getPanel()->onClick().connect([]() {
-        if (hal_bridge::is_xiaozhi_ready()) {
-            hal_bridge::toggle_xiaozhi_chat_state();
-        }
-    });
-
+    // Build the avatar for the persisted familiar (default procedural face, or a
+    // sprite familiar like "cat"). buildAvatar also wires the panel tap-to-toggle
+    // handler. See stackchan/avatar/skins/familiar/.
+    auto avatar = stackchan::avatar::buildAvatar(stackchan::avatar::currentFamiliar(), lv_screen_active());
     stackchan.attachAvatar(std::move(avatar));
     stackchan.addModifier(std::make_unique<BreathModifier>());
     blink_modifier_id_ = stackchan.addModifier(std::make_unique<BlinkModifier>());
