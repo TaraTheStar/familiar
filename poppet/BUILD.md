@@ -1,9 +1,10 @@
-# Building the `local-only` firmware
+# Building the firmware
 
-This branch (`local-only`) is scoped for a self-hosted, LAN-only StackChan:
-all m5stack/tenclass cloud code is removed, and the OTA server + NTP servers
-are empty-by-default Kconfig options you must point at your own infrastructure.
-See the commit log on this branch for exactly what was changed vs `brett/dotty`.
+The `poppet` firmware is scoped for a self-hosted, LAN-only StackChan: all
+m5stack/tenclass cloud code is removed, and the OTA server + NTP servers are
+empty-by-default Kconfig options you must point at your own infrastructure. The
+firmware core is a pruned in-tree fork under `vendor/stackchan-esp32/` (see
+`vendor/stackchan-esp32/VENDOR.md` for upstream provenance); edit it directly.
 
 > The repo's `env/` virtualenv is **not** used for the firmware build. ESP-IDF
 > manages its own Python environment. You only need system `git` + `python3`
