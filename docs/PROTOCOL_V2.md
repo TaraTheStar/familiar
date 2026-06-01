@@ -638,9 +638,14 @@ shape.
 In v1, only device-as-MCP-server existed. v2 is bidirectional. Both sides MAY implement
 the server side of tool calls; neither is required to.
 
-> **Server contract:** grimoire does not expose itself as a tool provider (it does not
-> answer `tool_list`/`tool_call` *from* the device). Server-side helpers like
-> `get_current_time` are dispatched in-process during a turn, not advertised over the wire.
+> **Server contract:** *LLM-facing only.* grimoire contributes its own tools to the
+> **LLM's** catalog — the in-process helpers like `get_current_time`, plus any **external
+> standard-MCP servers** bridged in via the `-mcp-config` adapter (`internal/mcptools`; e.g.
+> a `fetch` server giving the model internet reach). External tools are namespaced
+> `mcp__<server>__<tool>` so they can't collide with the device catalog, and are dispatched
+> server-side (never forwarded to the device). A server that fails to connect is logged and
+> skipped, never fatal. grimoire still does **not** answer the *device-initiated* direction
+> (it does not serve `tool_list`/`tool_call` *from* the device) — that remains a non-goal.
 
 ---
 
@@ -841,10 +846,13 @@ in the normative sections above; this section records the outcome and rationale.
    `goodbye {reason}` notification in either direction, sent before a graceful close; the
    close frame still does the work (§4.10, §3.5).
 
-5. **MCP compatibility shim? → Out of scope for the wire protocol.** Bridging external
-   standard-MCP servers (Claude Desktop, Anthropic's servers) into the tool catalog is a
-   future server-side adapter, not part of v2. Build it later if we want to expose
-   external MCP tools to the LLM.
+5. **MCP compatibility shim? → implemented as a server-side adapter (not a wire change).**
+   Bridging external standard-MCP servers into the tool catalog is done off-wire by
+   `internal/mcptools` (`-mcp-config`): grimoire connects to the configured servers at
+   startup, lists their tools, and exposes them to the **LLM** namespaced
+   `mcp__<server>__<tool>`, dispatching calls server-side. The wire protocol is unchanged —
+   the device never sees these tools. See §6.5 "Server contract." (Device-initiated server
+   tools — the reverse wire direction — remain a non-goal.)
 
 6. **Streaming transcripts? → implemented (opt-in).** whisper.cpp is batch, so streaming is
    done by periodic re-transcription of the growing mic buffer (not token-level streaming):

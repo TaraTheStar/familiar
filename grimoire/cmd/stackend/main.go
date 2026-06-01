@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log/slog"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/TaraTheStar/familiar/grimoire/internal/asr"
 	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/familiar/grimoire/internal/mcptools"
 	"github.com/TaraTheStar/familiar/grimoire/internal/ota"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 	"github.com/TaraTheStar/familiar/grimoire/internal/session"
@@ -65,6 +67,8 @@ func main() {
 		debugDumpDir = flag.String("debug-dump-dir", "", "DEBUG: write each captured turn's PCM as a 16kHz mono WAV here for playback")
 
 		timezone = flag.String("timezone", "UTC", "IANA timezone the get_current_time tool reports in (e.g. America/New_York)")
+
+		mcpConfig = flag.String("mcp-config", "", "Path to a JSON config of external MCP servers to bridge into the LLM tool catalog (see mcp.example.json); empty disables the adapter")
 
 		// Protocol v2 audio flow control: the server→device send budget, in
 		// 60ms Opus frames, advertised in the v2 hello. Tunable so the credit
@@ -179,6 +183,21 @@ func main() {
 	}
 	logger.Info("timezone configured", "tz", *timezone)
 
+	// External MCP tool adapter: bridge configured standard-MCP servers into the
+	// LLM tool catalog (PROTOCOL_V2 §6.5). Connects at startup; a server that
+	// fails is logged and skipped, never fatal. nil when no config is given.
+	var serverTools session.ToolProvider
+	if *mcpConfig != "" {
+		mcpCfg, err := loadMCPConfig(*mcpConfig)
+		if err != nil {
+			logger.Error("read -mcp-config failed", "path", *mcpConfig, "err", err)
+			os.Exit(2)
+		}
+		mgr := mcptools.New(context.Background(), mcpCfg, logger.With("component", "mcp"))
+		defer mgr.Close()
+		serverTools = mgr
+	}
+
 	sessionHandler := session.Handler(session.Config{
 		TTSAudio:         protocol.AudioParams{SampleRate: *ttsSampleRate, FrameDuration: 60},
 		TTSTailPadMS:     *ttsTailPadMS,
@@ -188,6 +207,7 @@ func main() {
 		ASR:              whisper,
 		ASRStreaming:     *asrStreaming,
 		LLM:              llmClient,
+		ServerTools:      serverTools,
 		SystemPrompt:     sysPrompt,
 		VisionURL:        *visionURL,
 		HardcodedReply:   *hardcodedReply,
@@ -286,6 +306,19 @@ func mountBrand(mux *http.ServeMux, brand string, otaHandler, sessionHandler htt
 	mux.HandleFunc("/"+brand+"/ota/", otaHandler)
 	mux.HandleFunc("/"+brand+"/ota", otaHandler)
 	mux.HandleFunc("/"+brand+"/", sessionHandler)
+}
+
+// loadMCPConfig reads and parses the -mcp-config JSON file.
+func loadMCPConfig(path string) (mcptools.Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return mcptools.Config{}, err
+	}
+	var cfg mcptools.Config
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return mcptools.Config{}, err
+	}
+	return cfg, nil
 }
 
 func parseLevel(s string) slog.Level {

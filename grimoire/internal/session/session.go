@@ -91,6 +91,12 @@ type Config struct {
 	// skipped.
 	LLM *llm.Client
 
+	// ServerTools, if non-nil, is a process-global provider of extra LLM-callable
+	// tools beyond the device's catalog — external MCP servers bridged in
+	// (internal/mcptools). Shared across all sessions; its tools are advertised to
+	// the LLM and dispatched server-side, never forwarded to the device.
+	ServerTools ToolProvider
+
 	// SystemPrompt, if non-empty, is prepended as a system message on
 	// every LLM call. Keeps the persona consistent across turns without
 	// bloating the persistent dialogue history.
@@ -415,11 +421,17 @@ func (s *Session) run(ctx context.Context) {
 func (s *Session) snapshotTools() []llm.Tool {
 	s.toolsMu.RLock()
 	defer s.toolsMu.RUnlock()
-	// Device (MCP) tools first, then server-side tools. localTools is set
-	// once at construction so it's safe to read here.
-	out := make([]llm.Tool, 0, len(s.tools)+len(s.localTools))
+	// Device (MCP) tools first, then per-session local tools, then any
+	// process-global server tools (external MCP, etc). localTools is set once at
+	// construction and ServerTools is process-global, so both are safe to read.
+	var serverTools []llm.Tool
+	if s.cfg.ServerTools != nil {
+		serverTools = s.cfg.ServerTools.Tools()
+	}
+	out := make([]llm.Tool, 0, len(s.tools)+len(s.localTools)+len(serverTools))
 	out = append(out, s.tools...)
 	out = append(out, s.localTools...)
+	out = append(out, serverTools...)
 	if len(out) == 0 {
 		return nil
 	}

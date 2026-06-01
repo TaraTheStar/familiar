@@ -334,6 +334,25 @@ func (s *Session) dispatchToolCall(ctx context.Context, tc llm.ToolCall) (string
 		return result, nil
 	}
 
+	// Server-side tool providers (external MCP, etc.) are also dispatched
+	// in-process, not forwarded to the device.
+	if s.cfg.ServerTools != nil && s.cfg.ServerTools.Handles(tc.Function.Name) {
+		s.log.Info("turn: server tool call", "name", tc.Function.Name, "args", tc.Function.Arguments)
+		args := json.RawMessage(tc.Function.Arguments)
+		if len(args) == 0 {
+			args = json.RawMessage(`{}`)
+		}
+		result, err := s.cfg.ServerTools.Call(ctx, tc.Function.Name, args)
+		if err != nil {
+			if result == "" {
+				result = fmt.Sprintf("Tool call failed: %v", err)
+			}
+			return result, err
+		}
+		s.log.Info("turn: server tool result", "name", tc.Function.Name, "result", truncate(result, 120))
+		return result, nil
+	}
+
 	if s.toolPort == nil {
 		return "Tool not available (no device tool registry).", fmt.Errorf("no tool port")
 	}

@@ -23,6 +23,23 @@ import (
 // dialogue as the tool message.
 type localToolHandler func(ctx context.Context, args json.RawMessage) (string, error)
 
+// ToolProvider is an optional process-global source of extra LLM-callable tools
+// beyond the device's own catalog and the per-session local tools above — e.g.
+// external MCP servers bridged in (internal/mcptools). It is shared across all
+// sessions; its tools are exposed to the LLM via snapshotTools and dispatched
+// in-process via dispatchToolCall, never forwarded to the device. nil disables
+// it. Tool names are expected to be namespaced so they can't collide with the
+// device catalog. Implementations must be safe for concurrent use.
+type ToolProvider interface {
+	// Tools is the LLM tool catalog this provider contributes.
+	Tools() []llm.Tool
+	// Handles reports whether a tool name belongs to this provider.
+	Handles(name string) bool
+	// Call invokes the named tool. On a tool-level failure it returns descriptive
+	// text alongside a non-nil error so the loop can feed the text to the LLM.
+	Call(ctx context.Context, name string, args json.RawMessage) (string, error)
+}
+
 // buildLocalTools returns the server-side tool descriptors to advertise plus
 // the handler map to dispatch them. Called once per session at construction.
 func (s *Session) buildLocalTools() ([]llm.Tool, map[string]localToolHandler) {

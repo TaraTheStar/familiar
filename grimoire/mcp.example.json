@@ -1,0 +1,17 @@
+{
+  "_comment": "External MCP servers bridged into the LLM tool catalog (PROTOCOL_V2 §6.5). Pass with -mcp-config. Each server's tools are exposed to the LLM namespaced mcp__<name>__<tool> and dispatched server-side. A server that fails to start is logged and skipped, never fatal.",
+  "servers": [
+    {
+      "name": "fetch",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    {
+      "_comment": "HTTP transport example (commented intent — remove to use): a remote MCP endpoint.",
+      "name": "example-remote",
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp"
+    }
+  ]
+}
