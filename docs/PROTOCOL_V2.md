@@ -1,14 +1,15 @@
-# StackChan Protocol v2 (Draft)
+# StackChan Protocol v2
 
-A normative spec for a redesigned wire protocol between a self-hosted StackChan server
-and its devices. Fixes the warts in v1 (the live contract, documented in
+The normative spec for the wire protocol between a self-hosted StackChan server
+and its devices. Fixes the warts in v1 (the retired predecessor, documented in
 [PROTOCOL_V1.md](PROTOCOL_V1.md)) while preserving its sensible design choices.
 
-**Status:** §11 open questions resolved (see §11) and the **server contract is locked**:
-the grimoire server implements v2 end-to-end alongside v1 (which stays the default),
-verified by goldens, a fuzzer, and a v1↔v2 equivalence harness. Per-section
-"**Server contract**" call-outs pin what the reference server does, including the few
-deferred items (hello renegotiation, wake pre-roll, `tools_inline`). Not yet in firmware.
+**Status: LIVE — this is the only protocol the server and firmware speak.** §11 open
+questions are resolved (see §11), the server contract is locked, and Phase 5 (§10) is
+complete: grimoire is **v2-only** (v1 removed) and the poppet firmware is fully ported
+to v2. Per-section "**Server contract**" call-outs pin what the reference server does,
+including the few deferred items (hello renegotiation, `tools_inline`). Voice barge-in
+is specified (§8) but **deferred to v2.1** — the shipped system is half-duplex (see §8).
 
 **Selected by:** HTTP header `Protocol-Version: 2` during WS upgrade.
 
@@ -62,7 +63,7 @@ deferred items (hello renegotiation, wake pre-roll, `tools_inline`). Not yet in 
 
 ```json
 {
-  "ws_url": "ws://192.0.2.10:9098/xiaozhi/",
+  "ws_url": "ws://192.0.2.10:9098/grimoire/",
   "firmware": {                    // optional, present only when an update is offered
     "version": "2.0.0",
     "url": "http://192.0.2.10:9099/firmware/stack-chan-2.0.0.bin"
@@ -87,8 +88,11 @@ optionally `Authorization`). No `Activation-Version` (no activation in v2).
 
 > **Server contract:** grimoire serves v2 discovery at **`GET /discover`** (the lean
 > `{ws_url, firmware?}` shape above; `firmware` is present only when an update URL is
-> configured). The v1 OTA endpoints (`/ota/`, `/xiaozhi/ota/`) stay mounted with the
-> richer v1 response for existing firmware. Both advertise the same `ws_url`.
+> configured; POST is tolerated for OTA-client compatibility). The firmware's boot
+> client accepts **both** this shape and the richer v1-era OTA response, so its
+> configured URL may point at either `/discover` (v2-native, preferred) or
+> `/grimoire/ota/` / `/ota/`, which stay mounted for already-flashed devices. All
+> advertise the same `ws_url`.
 
 ### 2.2 WebSocket — everything else
 
@@ -101,13 +105,15 @@ URL from `discover.ws_url`. Required headers at upgrade time:
 | `Client-Id` | UUID |
 | `Authorization` | `Bearer <token>` (only if server requires) |
 
-Server MUST reject the upgrade with HTTP 426 (Upgrade Required) if `Protocol-Version` is
-not 1 or 2.
+Server MUST reject the upgrade with HTTP 426 (Upgrade Required) unless
+`Protocol-Version` is `2` (or absent, which is treated as 2 — the server is v2-only and
+a bare client gets the only protocol on offer).
 
-> **Server contract:** the protocol version is carried by the `Protocol-Version` header,
-> not the URL path, so grimoire serves **both** v1 and v2 on the same handler. It mounts
-> it at the version-neutral **`/xiaozhi/`** (advertised to v2 devices) and keeps
-> **`/xiaozhi/v1/`** mounted for devices that cached it. A v2 device may use either path.
+> **Server contract:** grimoire accepts `Protocol-Version: 2` or an absent header and
+> 426s anything else — including `1`, since Phase 4 (§10) removed the v1 stack. The
+> session handler is mounted at **`/grimoire/`**; the old `/xiaozhi/` mounts were
+> dropped with the v1 removal (devices are reflashed to dial `/grimoire/` before the
+> server is upgraded).
 
 ### 2.3 Optional: vision callback
 
@@ -277,9 +283,10 @@ no pre-roll. Either way, everything from the window-opening message through
 `listen_stop` is one utterance. This resolves §11 Q1 (the spec previously suggested
 frames *before* `wake`, which would orphan them under §7's correlation rule).
 
-A `wake` sent **during server TTS** is a barge-in (see §8), not a turn start: it is
-followed by `abort`, and does **not** open a capture window. Pre-roll applies only to a
-`wake` from idle.
+A `wake` sent **during server TTS** is a barge-in (see §8 — voice barge-in is deferred
+to v2.1; the shipped firmware is half-duplex), not a turn start: it is followed by
+`abort`, and does **not** open a capture window. Pre-roll applies only to a `wake` from
+idle.
 
 **Abort** — user interrupted server's TTS:
 
@@ -292,9 +299,10 @@ followed by `abort`, and does **not** open a capture window. Pre-roll applies on
 > device that advertised the feature gets its audio window opened at a `wake` from idle, so
 > pre-roll binary frames sent before `listen_start` are buffered as turn audio (then
 > `listen_start` attaches the mode's endpoint detector and keeps the buffered pre-roll; the
-> server-VAD does not run over the pre-roll, so the wake tail can't self-endpoint). The feature
-> is still off by default in firmware (`CONFIG_SEND_WAKE_WORD_DATA=n`); a device that doesn't
-> advertise it, or a `wake` mid-window (a barge-in), gets the window at `listen_start` as before.
+> server-VAD does not run over the pre-roll, so the wake tail can't self-endpoint). The firmware
+> ships with the feature on (`CONFIG_SEND_WAKE_WORD_DATA=y`, its Kconfig default) and advertises
+> `wake_word_audio` iff that option is compiled in; a device that doesn't advertise it, or a
+> `wake` mid-window (a barge-in), gets the window at `listen_start` as before.
 
 ### 4.3 Speech recognition (server → device)
 
@@ -507,6 +515,13 @@ frames than it has credit for. If credit hits zero, server pauses; resumes on ne
 
 Device sends `audio_credit` as its decoder queue drains. Typical: send `audio_credit:N`
 each time N frames are dequeued from the playback buffer.
+
+Credit accounts for **buffer space, not playback**: a server frame that frees its buffer
+slot without playing — flushed by a barge-in / `audio_cancel` reset, or dropped because
+no utterance was open or the queue was full — MUST be credited back just like a consumed
+frame. Otherwise every interruption permanently shrinks the server's send window. Only
+server-sent frames mint credit; locally generated audio sharing the same buffer (e.g.
+notification sounds) MUST NOT.
 
 ### 5.4 Why credits, not blocking sends
 
@@ -725,9 +740,17 @@ frames are already length-delimited). No magic numbers. Just bytes.
 
 ### Barge-in
 
+> **DEFERRED TO v2.1 (voice path).** The wire mechanics below are normative and the
+> server implements the `abort` → `audio_cancel` exchange, but **voice** barge-in — the
+> wake word firing during server TTS — does not ship in v1 of the release: the firmware
+> compiles wake-word-detection-during-speaking out (`CONFIG_WAKE_WORD_DETECTION_IN_SPEAKING`,
+> default `n`), so the shipped system is half-duplex. What DOES work today is the manual
+> abort (button/touch), which sends `abort` without a preceding `wake`; the server keys
+> on `abort` alone, so the `wake` line below is optional in practice.
+
 ```
-During step 8, user says "Hi Stackchan" again:
-Device → wake {phrase:"hi_stackchan"}
+During step 8, user says "Hi Stackchan" again (v2.1) — or presses the button (today):
+Device → wake {phrase:"hi_stackchan"}     // voice path only, deferred to v2.1
 Device → abort {reason:"wake"}
 Server → audio_cancel {utterance_id:7}
 (Both sides flush; server proceeds as if step 5 just happened.)
@@ -780,11 +803,12 @@ Codes are forward-compatible: new codes can be added. Receivers MUST tolerate un
 codes (treat as `INTERNAL`).
 
 > **Server contract:** grimoire emits `PROTOCOL_VIOLATION` (malformed inbound frame),
-> `ASR_FAILED` (transcription error), and `LLM_FAILED` / `TTS_FAILED` (turn-pipeline
-> error, classified from the failure). Errors are suppressed when the turn was cancelled
-> by a barge-in (the failure is expected, not reportable). It does not emit `ASR_TIMEOUT`
-> (whisper is batch, no timeout), `BUSY`, or `UNSUPPORTED_AUDIO` (the server dictates
-> audio, §3.2). The device should log+degrade on any code, recognized or not.
+> `ASR_FAILED` (transcription error), `LLM_FAILED` / `TTS_FAILED` (turn-pipeline error,
+> classified from the failure), and `INTERNAL` (unclassifiable turn error). Errors are
+> suppressed when the turn was cancelled by a barge-in (the failure is expected, not
+> reportable). It does not emit `ASR_TIMEOUT` (whisper is batch, no timeout), `BUSY`, or
+> `UNSUPPORTED_AUDIO` (the server dictates audio, §3.2). The device should log+degrade
+> on any code, recognized or not.
 
 ### 9.4 Protocol violations
 
@@ -794,18 +818,18 @@ message, then continue. Don't close the connection over a single bad message.
 
 ---
 
-## 10. Migration from v1
+## 10. Migration from v1 (completed)
 
-Server implements BOTH protocols, selected by `Protocol-Version` header at WS upgrade
-(this header already exists in v1 — currently always `"1"`).
+Historical plan, kept as the record of how the cutover ran. During migration the server
+implemented both protocols, selected by the `Protocol-Version` header at WS upgrade.
 
 | Phase | Server | Firmware |
 |---|---|---|
-| 0 | v1 only (current) | v1 only (current) |
+| 0 | v1 only | v1 only |
 | 1 | v1 + v2 (parallel impls) | v1 only |
 | 2 | v1 + v2 | v2 added, defaulting to v1 |
 | 3 | v1 + v2 | v2 default |
-| 4 | **v2 only** ✅ done 2026-05-30 (server) | v2 only |
+| 4 | **v2 only** ✅ done 2026-05-30 | **v2 only** ✅ ported (Stage B/C) |
 
 **Phase 4 reached server-side, 2026-05-30.** v1 is removed from the server: the v1 wire types,
 `Decode`, the `internal/mcp` package, the v1 `deviceOut`/decoder/tool-port (`wire_v1.go`,
@@ -831,8 +855,8 @@ in the normative sections above; this section records the outcome and rationale.
    turn's audio window and the buffered pre-roll streams as binary frames before
    `listen_start` (§4.2, §7). This differs from this draft's original suggestion of frames
    *before* `wake`, which would orphan them under §7's correlation rule. Gated by the
-   feature flag, default off — matches the firmware's current `CONFIG_SEND_WAKE_WORD_DATA=n`
-   while defining the framing once so flipping it on later needs no protocol revision.
+   feature flag: the firmware advertises `wake_word_audio` iff it is built with
+   `CONFIG_SEND_WAKE_WORD_DATA` (default y), and sends `wake` before the pre-roll frames.
 
 2. **Should `caption` support segment-level granularity? → Not in v2.** One `caption` per
    sentence, cumulative `text`, device displays verbatim (§4.4). Per-word `segments` is
@@ -883,19 +907,19 @@ code stays as-is for backward compat.
 
 ## 13. Status of this document
 
-The §11 open questions are resolved and the **server side is implemented and the contract
-locked** — the wire format is stable to build firmware against. Per the migration plan
-(§10) the server speaks v1 + v2 in parallel (v1 default); firmware is unchanged.
+This is the **live contract**: the §11 open questions are resolved, the server contract
+is locked, and per the migration plan (§10, Phase 5) the server is **v2-only** and the
+firmware speaks only v2. The wire format is stable; changes from here follow normal
+spec-then-implement discipline.
 
 The implementation-companion artifacts (all under `grimoire/internal/protov2` and
 `grimoire/internal/session`) are done:
 - **Examples** — JSON exemplars for every message type (`protov2/testdata/examples/`,
   generated + validated by `TestExamples`).
 - **Wire fuzzer** — `FuzzDecode`: no panics, type-stable round-trips on the dispatcher.
-- **v1↔v2 adapter harness** — `TestV1V2Equivalence` runs one scripted turn through both
-  protocols and asserts identical meaning; the seam-contract test pins the loop's call
-  order; per-protocol goldens pin exact bytes.
+- **Goldens / seam tests** — the seam-contract test pins the loop's call order;
+  per-protocol goldens pin exact bytes. (The v1↔v2 equivalence harness retired with v1.)
 
-Deferred (tracked in the "Server contract" call-outs, none blocking firmware bring-up):
-hello renegotiation (§3.3), `wake_word_audio` pre-roll handling (§4.2), `tools_inline`
-(§6.4), and server-as-tool-provider (§6.5).
+Deferred (tracked in the "Server contract" call-outs): hello renegotiation (§3.3),
+`tools_inline` device-side (§6.4), voice barge-in (§8, v2.1), and per-word caption
+segments (§11 Q2, v2.1).

@@ -1,20 +1,22 @@
-# StackChan Protocol v1 (Live)
+# StackChan Protocol v1 (Retired — historical reference)
 
-The wire contract between the StackChan device ([poppet](../poppet)) and the
-self-hosted backend ([grimoire](../grimoire)) **as it ships today**: every HTTP
-endpoint and WebSocket message the firmware expects or emits. grimoire
-implements this; poppet speaks it. **REMOVED FROM THE SERVER (2026-05-30).** This documents the v1 wire format the
+**REMOVED FROM THE SERVER (2026-05-30).** This documents the v1 wire format the
 firmware originally spoke; it is retained for historical reference only. The live
 protocol is [PROTOCOL_V2.md](PROTOCOL_V2.md). The server no longer implements v1 at
 all — the v1 wire types, the MCP-over-WS tool path, and the legacy `/xiaozhi/` route
 mounts were deleted in migration Phase 5 (PROTOCOL_V2 §10.2). A device must speak v2
 on `/grimoire/`.
 
-Source of truth (device side): the vendored xiaozhi-esp32 tree fetched into
-`poppet/xiaozhi-esp32/main/` —
-`protocols/{protocol,websocket_protocol}.{h,cc}`, `application.cc`, `ota.cc`,
-`mcp_server.cc`, `audio/audio_service.{h,cc}`, `boards/common/board.cc`, plus
-`poppet/patches/xiaozhi-esp32.patch` for our changes.
+This was the wire contract between the StackChan device ([poppet](../poppet)) and
+the self-hosted backend ([grimoire](../grimoire)): every HTTP endpoint and
+WebSocket message the firmware expected or emitted.
+
+Source of truth at the time (device side) was the patched xiaozhi-esp32 tree the
+old fetch-and-patch workflow produced. That workflow is gone: the fork now lives
+in-tree at `poppet/vendor/stackchan-esp32/main/`
+(`protocols/{protocol,websocket_protocol}.{h,cc}`, `application.cc`, `ota.cc`,
+`mcp_server.cc`, `audio/audio_service.{h,cc}`), and its protocol layer speaks
+**v2** — so the code no longer matches this document anywhere.
 
 ---
 

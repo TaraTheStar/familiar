@@ -98,6 +98,6 @@ server (`grimoire`), proven on real hardware, plus three new features.
 
 ## Full commit log
 
-`git log main..` on `protocol-v2-server` (22 commits) — Stage A (reference client),
+`git log main..` on `protocol-v2-server` — Stage A (reference client),
 the v2 server, v1 removal, firmware v2 port + Stage-C bring-up fixes, firmware
 vendoring + de-brand, and the WS4 features.

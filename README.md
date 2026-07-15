@@ -12,17 +12,18 @@ person. This repo holds the two halves of ours.
 ```
 familiar/
 ├─ poppet/      # the firmware — the little body that sits on your desk
-│               #   (M5Stack StackChan app on a vendored, patched xiaozhi-esp32)
+│               #   (M5Stack StackChan app on a vendored xiaozhi-esp32 fork,
+│               #    committed in-tree at poppet/vendor/stackchan-esp32/)
 ├─ grimoire/    # the backend — hears (whisper), thinks (LLM), speaks (Kokoro)
 │               #   Go server, deployed as a container
 └─ docs/        # the poppet↔grimoire contract
-   ├─ PROTOCOL_V1.md       # the live v1 wire protocol grimoire implements
-   └─ PROTOCOL_V2.md       # planned v2 redesign (draft, unimplemented)
+   ├─ PROTOCOL_V1.md       # the retired v1 wire protocol (historical)
+   └─ PROTOCOL_V2.md       # the live v2 contract both halves implement
 ```
 
 - **[poppet/](poppet/)** — firmware. Build with ESP-IDF v5.5.4; run
-  `python3 fetch_repos.py` first to pull and patch the vendored components.
-  See [poppet/BUILD.md](poppet/BUILD.md).
+  `python3 fetch_repos.py` first to pull the component libraries (mooncake,
+  smooth_ui_toolkit, ArduinoJson, esp-now). See [poppet/BUILD.md](poppet/BUILD.md).
 - **[grimoire/](grimoire/)** — Go backend. `make build` (needs the whisper.cpp
   submodule). See [grimoire/README.md](grimoire/README.md).
 
@@ -61,8 +62,9 @@ derivative**, not original code. With gratitude to:
 - [BrettKinny/StackChan](https://github.com/BrettKinny/StackChan) — the fork
   whose firmware work (`dotty` / firmware branches) poppet derives from.
 - [78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) @ v2.2.4 — the AI
-  firmware base we vendor and patch (MIT, © 2025 Shenzhen Xinzhi Future
-  Technology Co., Ltd. and Project Contributors).
+  firmware base our in-tree fork at `poppet/vendor/stackchan-esp32/` derives
+  from (MIT, © 2025 Shenzhen Xinzhi Future Technology Co., Ltd. and Project
+  Contributors).
 - Bosch Sensortec [BMI270 SensorAPI](https://github.com/boschsensortec/BMI270_SensorAPI)
   under `poppet/main/hal/drivers/bmi270/` (BSD-3-Clause, © 2023 Bosch Sensortec GmbH).
 - Components fetched by `poppet/fetch_repos.py`:
