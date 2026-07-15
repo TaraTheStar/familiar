@@ -45,8 +45,11 @@ type ASR interface {
 // device in our hello response.
 type Config struct {
 	// TTSAudio is what we promise to send back as TTS output. The firmware
-	// configures its Opus decoder to these params. Recommended:
-	// sample_rate=24000, frame_duration=60.
+	// configures its Opus decoder to these params. Default (and the rate the
+	// device wants): sample_rate=16000, frame_duration=60 — the device's
+	// playback is AEC-locked to its 16k mic rate, so the server downsamples
+	// its 24k Kokoro source rather than making the device resample
+	// (PROTOCOL_V2 §1 non-goals).
 	TTSAudio protocol.AudioParams
 
 	// MicAudio is the format we expect the device's microphone to send.
@@ -107,11 +110,6 @@ type Config struct {
 	// captures to this URL when the LLM calls self.camera.take_photo.
 	VisionURL string
 
-	// VisionToken, if non-empty, is the bearer token the device will
-	// include in the Authorization header on vision POSTs. Useful when
-	// the vision endpoint is exposed beyond the LAN.
-	VisionToken string
-
 	// HardcodedReply, if non-empty, BYPASSES the ASR + LLM pipeline and
 	// speaks this text on every listen:stop. Useful for milestone-2-style
 	// smoke testing against a real device.
@@ -171,7 +169,7 @@ func Handler(cfg Config) http.HandlerFunc {
 		cfg.HandshakeTimeout = 8 * time.Second
 	}
 	if cfg.TTSAudio.SampleRate == 0 {
-		cfg.TTSAudio = protocol.AudioParams{SampleRate: 24000, FrameDuration: 60}
+		cfg.TTSAudio = protocol.AudioParams{SampleRate: 16000, FrameDuration: 60}
 	}
 	if cfg.MicAudio.SampleRate == 0 {
 		cfg.MicAudio = protocol.AudioParams{SampleRate: 16000, Channels: 1, FrameDuration: 60}
@@ -275,10 +273,9 @@ type Session struct {
 	// micBuf accumulates decoded PCM (s16 little-endian) during a listen
 	// turn. Bounded by micBufMax to keep one rogue session from eating
 	// all RAM. Reset on every listen:start.
-	micBuf     []byte
-	micBufMax  int
-	listening  bool
-	micDropped bool // true once we hit micBufMax and started dropping
+	micBuf    []byte
+	micBufMax int
+	listening bool
 
 	// turnSeq numbers captured turns for debug WAV dump filenames.
 	turnSeq atomic.Int64
@@ -319,14 +316,22 @@ type Session struct {
 	// re-arm listening. Written only on the read-loop goroutine.
 	autoStop bool
 
-	// rearm is set by handleTurn (a separate goroutine) when a turn finishes
-	// without a spoken reply. In auto mode the device keeps streaming while
-	// in its Listening state, so the read loop resumes endpointing the
-	// ongoing audio on the next frame — otherwise voice gets stuck (the
-	// device never sends a fresh listen:start without a Speaking transition).
-	// An atomic so the turn goroutine can signal without touching listening
-	// state directly (which only the read-loop goroutine mutates).
-	rearm atomic.Bool
+	// rearm is set by a finishing turn (a separate goroutine). In auto mode the
+	// device keeps streaming while in its Listening state, so the read loop
+	// resumes endpointing the ongoing audio on the next frame — otherwise voice
+	// gets stuck (the device never sends a fresh listen:start without a
+	// Speaking transition). An atomic so the turn goroutine can signal without
+	// touching listening state directly (which only the read-loop goroutine
+	// mutates). It carries the requesting turn's generation (0 = none pending):
+	// the read loop honors it only while that turn is still the latest, so a
+	// slow or barged-in turn's parting signal can't re-open a listening window
+	// in the middle of its successor.
+	rearm atomic.Int64
+
+	// turnGen numbers turns monotonically (see beginTurn). Written and read on
+	// the read-loop goroutine only, so unsynchronized; turn goroutines see
+	// their own generation as a captured local.
+	turnGen int64
 
 	// turnCancel cancels the in-flight turn's context for barge-in (abort) and
 	// session teardown. Set in fireTurn, invoked by cancelTurn — both on the
@@ -500,7 +505,8 @@ func (s *Session) handshakeV2(ctx context.Context) error {
 	// Server capabilities advertised to the device. "tools" is always present
 	// (we discover and call device tools); "vision" only when a callback URL is
 	// configured. The server dictates audio params (it does not negotiate the
-	// device's offer — PROTOCOL_V2 §3.2): fixed 16k mic / 24k TTS hardware.
+	// device's offer — PROTOCOL_V2 §3.2): 16k mic in, 16k TTS out (the device's
+	// playback is AEC-locked to its mic rate).
 	features := []string{"tools"}
 	if s.cfg.VisionURL != "" {
 		features = append(features, "vision")
@@ -572,13 +578,13 @@ func (s *Session) tailPadFrames() int {
 func (s *Session) readLoop(ctx context.Context) {
 	for {
 		readCtx := ctx
+		cancel := context.CancelFunc(func() {})
 		if s.cfg.ReadIdleTimeout > 0 {
-			var cancel context.CancelFunc
 			readCtx, cancel = context.WithTimeout(ctx, s.cfg.ReadIdleTimeout)
-			defer cancel()
 		}
 
 		mt, data, err := s.conn.Read(readCtx)
+		cancel()
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 				return
@@ -609,7 +615,6 @@ func (s *Session) readLoop(ctx context.Context) {
 // fresh endpoint detector for auto-stop mode. Read-loop goroutine only.
 func (s *Session) armListen() {
 	s.micBuf = s.micBuf[:0]
-	s.micDropped = false
 	s.listening = true
 	s.prerollOpen = false
 	s.lastPartialBytes = 0 // restart the streaming-ASR debounce for the new window
@@ -682,8 +687,12 @@ func (s *Session) onAudioFrame(ctx context.Context, opusBytes []byte) {
 		// the device (in auto mode) is still in its Listening state streaming
 		// audio — but it won't send a fresh listen:start without a Speaking
 		// transition, so we'd never re-engage. Resume endpointing the ongoing
-		// stream. The CAS fires once per pending re-arm, on this goroutine.
-		if s.rearm.CompareAndSwap(true, false) {
+		// stream — but only for the latest turn: a stale generation means a
+		// newer turn superseded the requester, and honoring its re-arm would
+		// capture speaker-era audio mid-turn. Fires once per pending re-arm,
+		// on this goroutine (the only consumer).
+		if g := s.rearm.Load(); g != 0 && g == s.turnGen {
+			s.rearm.Store(0)
 			s.log.Debug("re-arming listening (previous turn had no reply; device still streaming)")
 			s.armListen()
 		} else {
@@ -750,7 +759,7 @@ func (s *Session) dispatchText(ctx context.Context, data []byte) {
 		// we endpoint server-side. Manual mode sends its own stop, so skip the
 		// detector.
 		s.autoStop = e.Mode == "auto" || e.Mode == ""
-		s.rearm.Store(false)
+		s.rearm.Store(0)
 		if s.prerollOpen {
 			// The window was already opened by a wake pre-roll (§4.2). Keep the
 			// buffered pre-roll and just attach the now-known mode's detector;
@@ -776,12 +785,11 @@ func (s *Session) dispatchText(ctx context.Context, data []byte) {
 		s.log.Info("wake", "phrase", e.Phrase, "preroll", s.wakeWordAudio && !s.listening)
 		if s.wakeWordAudio && !s.listening {
 			s.micBuf = s.micBuf[:0]
-			s.micDropped = false
 			s.listening = true
 			s.prerollOpen = true
 			s.ep = nil
 			s.lastPartialBytes = 0 // restart the streaming-ASR debounce
-			s.rearm.Store(false)
+			s.rearm.Store(0)
 		}
 	case evAbort:
 		// Barge-in: cancel the in-flight turn. The TTS sink emits audio_cancel
@@ -831,7 +839,7 @@ func (s *Session) handleTelemetry(ctx context.Context, e evTelemetry) {
 		if pct := batteryPercent(e.Data); pct >= 0 {
 			msg = fmt.Sprintf("Battery at %d%% — please charge me", pct)
 		}
-		if err := as.SendAlert(ctx, "Battery low", msg, "sad", "vibration"); err != nil {
+		if err := as.SendAlert(ctx, "Battery low", msg, "sad", "low_battery"); err != nil {
 			s.log.Warn("send battery alert", "err", err)
 		}
 	}

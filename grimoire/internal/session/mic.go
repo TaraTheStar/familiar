@@ -37,7 +37,7 @@ func (s *Session) fireTurn(ctx context.Context, reason string) {
 	switch {
 	case s.cfg.HardcodedReply != "":
 		s.log.Info("turn fired (hardcoded reply)", "reason", reason, "pcm_bytes", len(turn))
-		turnCtx, cancel := s.beginTurn(ctx)
+		turnCtx, cancel, _ := s.beginTurn(ctx)
 		go func() {
 			defer cancel()
 			if err := s.speakReply(turnCtx, s.cfg.HardcodedReply); err != nil {
@@ -46,10 +46,21 @@ func (s *Session) fireTurn(ctx context.Context, reason string) {
 		}()
 	case s.cfg.ASR != nil && s.cfg.LLM != nil:
 		s.log.Info("turn fired", "reason", reason, "pcm_bytes", len(turn), "approx_ms", approxMS)
-		turnCtx, cancel := s.beginTurn(ctx)
+		turnCtx, cancel, gen := s.beginTurn(ctx)
 		go func() {
 			defer cancel()
 			s.handleTurn(turnCtx, turn)
+			// When the turn ends, ask the read loop to resume listening. If we
+			// sent TTS, the device transitions Speaking→Listening and sends its
+			// own fresh listen:start (which clears this); if we sent NO reply,
+			// the device stays in Listening streaming, and this is what
+			// un-sticks the next utterance. Not on cancellation, though — a
+			// barged-in turn's successor owns the mic state, and a stale re-arm
+			// would re-open a listening window mid-turn. The generation tag
+			// lets the read loop ignore this signal once a newer turn exists.
+			if turnCtx.Err() == nil {
+				s.rearm.Store(gen)
+			}
 		}()
 	case len(turn) > 0:
 		s.log.Info("captured utterance (no pipeline configured)",
@@ -60,11 +71,14 @@ func (s *Session) fireTurn(ctx context.Context, reason string) {
 // beginTurn derives a cancelable context for a turn and records its cancel func
 // so cancelTurn (barge-in) can interrupt it. Read-loop goroutine only, so no
 // locking: fireTurn and cancelTurn never run concurrently. The turn goroutine
-// must defer the returned cancel to release the context when it ends.
-func (s *Session) beginTurn(ctx context.Context) (context.Context, context.CancelFunc) {
+// must defer the returned cancel to release the context when it ends. The
+// returned generation identifies this turn for the re-arm handshake: bumping
+// it here invalidates any re-arm signal a previous turn has yet to send.
+func (s *Session) beginTurn(ctx context.Context) (context.Context, context.CancelFunc, int64) {
+	s.turnGen++
 	turnCtx, cancel := context.WithCancel(ctx)
 	s.turnCancel = cancel
-	return turnCtx, cancel
+	return turnCtx, cancel, s.turnGen
 }
 
 // cancelTurn interrupts the in-flight turn, if any. Idempotent: a finished

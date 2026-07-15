@@ -19,6 +19,14 @@ import (
 // to protect the user from runaway costs / latency.
 const maxToolIterations = 6
 
+// maxDialogueMessages caps the running dialogue history. Sessions live as long
+// as the WS (hours on an always-on device), and an unbounded history would
+// eventually overflow the LLM's context window — after which every turn fails
+// until reconnect. Trimming keeps the freshest conversation; older turns fall
+// off. ~48 messages is dozens of voice exchanges — far more than a spoken
+// conversation meaningfully refers back to.
+const maxDialogueMessages = 48
+
 // handleTurn is the heart of the voice loop. Given the raw PCM bytes
 // captured between listen:start and listen:stop, it:
 //
@@ -34,12 +42,8 @@ const maxToolIterations = 6
 // The whole call is wrapped in a context tied to the session lifetime
 // so a WS close cancels in-flight LLM / MCP / TTS work.
 func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
-	// When this turn ends, ask the read loop to resume listening. If we sent
-	// TTS, the device transitions Speaking→Listening and sends its own fresh
-	// listen:start (which clears this flag); if we sent NO reply, the device
-	// stays in Listening streaming, and this is what un-sticks the next
-	// utterance. Harmless after a sleep (device gated, no frames arrive).
-	defer s.rearm.Store(true)
+	// NOTE: the turn goroutine in fireTurn signals re-arm when this returns
+	// (generation-tagged, skipped on cancellation) — see mic.go.
 
 	if s.cfg.ASR == nil || s.cfg.LLM == nil || s.cfg.Kokoro == nil {
 		s.log.Warn("voice loop disabled: ASR/LLM/Kokoro missing",
@@ -91,9 +95,11 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	// Drive the avatar to "thinking" while the LLM works.
 	_ = s.out.Display(ctx, "thinking", "thinking")
 
-	// Seed dialogue with this user turn.
+	// Seed dialogue with this user turn, shedding the oldest turns once the
+	// history outgrows the cap.
 	s.dialogueMu.Lock()
 	s.dialogue = append(s.dialogue, llm.Message{Role: llm.RoleUser, Content: transcript})
+	s.dialogue = trimDialogue(s.dialogue, maxDialogueMessages)
 	s.dialogueMu.Unlock()
 
 	// Drive the tool loop. It may defer "sleep"-type state changes so the
@@ -266,9 +272,15 @@ func (s *Session) streamReply(ctx context.Context, msgs []llm.Message, tools []l
 		return s.speakSentence(ctx, sentence)
 	}
 
-	// Always end the Speaking session before returning (no-op if never begun).
+	// End the Speaking session before returning, but only if this reply opened
+	// one. SpeakEnd assumes its caller's SpeakBegin succeeded (and thus that the
+	// caller holds the wire lock); calling it from a reply that never began
+	// could close — and unlock — a concurrent reply's in-flight speak session.
 	// Preserve the first error: a stream/tts failure outranks a close failure.
 	defer func() {
+		if !spoke {
+			return
+		}
 		if e := s.out.SpeakEnd(ctx); e != nil && err == nil {
 			err = fmt.Errorf("tts close: %w", e)
 		}
@@ -299,6 +311,24 @@ func (s *Session) streamReply(ctx context.Context, msgs []llm.Message, tools []l
 		}
 	}
 	return assembled, toolCalls, spoke, nil
+}
+
+// trimDialogue bounds the history to at most max messages by dropping the
+// oldest. The cut lands on a user-message boundary so the survivors always
+// start a coherent exchange — cutting mid-turn could orphan a tool result from
+// the assistant tool_calls message it answers, which strict chat-completions
+// backends reject. If no user message exists in the tail (pathological), the
+// history is cleared rather than sent malformed.
+func trimDialogue(msgs []llm.Message, max int) []llm.Message {
+	if len(msgs) <= max {
+		return msgs
+	}
+	for i := len(msgs) - max; i < len(msgs); i++ {
+		if msgs[i].Role == llm.RoleUser {
+			return append(msgs[:0], msgs[i:]...) // slide down; keep the backing array
+		}
+	}
+	return msgs[:0]
 }
 
 // isSleepCommand reports whether a tool call is the device's go-to-sleep

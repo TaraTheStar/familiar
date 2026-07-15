@@ -4,8 +4,8 @@ The backend half of [familiar](../README.md) — the local-first voice-loop serv
 for the StackChan ESP32 robot ([poppet](../poppet/)).
 
 Replaces [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server) for
-self-hosted deployments. Implements the v1 wire protocol that the
-[poppet firmware](../poppet/) speaks.
+self-hosted deployments. Implements the v2 wire protocol that the
+[poppet firmware](../poppet/) speaks — v2-only since the Phase-4 cutover.
 
 ## Status
 
@@ -21,23 +21,28 @@ device ──WS──> stackend ──HTTP──> llama-swap   (LLM)
                        └─────────> Kokoro       (TTS)
 ```
 
-See [../docs/PROTOCOL_V1.md](../docs/PROTOCOL_V1.md) for the live wire protocol
-this implements, and [../docs/PROTOCOL_V2.md](../docs/PROTOCOL_V2.md) for the
-future-direction redesign (still a draft).
+See [../docs/PROTOCOL_V2.md](../docs/PROTOCOL_V2.md) for the live wire protocol
+this implements ([../docs/PROTOCOL_V1.md](../docs/PROTOCOL_V1.md) is the retired
+predecessor, kept for history).
 
 ## Layout
 
 ```
-cmd/stackend/        # entry point
+cmd/stackend/        # entry point (binary: stackend)
+cmd/v2client/        # reference v2 client (protocol smoke-testing)
 internal/
-  protocol/          # v1 wire format — JSON message types + binary framing
-  session/           # per-connection state machine
+  protov2/           # v2 wire format — JSON message types + decode
+  protocol/          # shared AudioParams + OTA HTTP response types
+  session/           # per-connection state machine; the voice loop
   audio/             # Opus encode/decode, frame muxing
   asr/               # whisper.cpp ASR (cgo, model bundled in image)
   llm/               # OpenAI-compatible client (talks to llama-swap)
   tts/               # Kokoro client + streaming sentence chunking
-  mcp/               # MCP-over-WS client (server-side, calls into device tools)
-  ota/               # /ota/ HTTP endpoint
+  mcptools/          # external MCP adapter — bridges standard MCP servers'
+                     #   tools to the LLM (server-side; never on the device wire)
+  vision/            # /vision endpoint — camera captures to a multimodal LLM
+  v2client/          # client-side v2 protocol library (backs cmd/v2client)
+  ota/               # /ota/, /grimoire/ota/, /discover HTTP endpoints
 ```
 
 ## Build
@@ -65,6 +70,16 @@ pkg-config. On Debian/Ubuntu:
 ```
 apt install golang cmake build-essential libopus-dev libopusfile-dev pkg-config
 ```
+
+## External MCP tools (optional)
+
+`-mcp-config=<file>` bridges standard MCP servers into the LLM's tool catalog
+(namespaced `mcp__<server>__<tool>`, dispatched server-side — the device never
+sees them). Copy `mcp.example.json`, adjust the server commands, and pass the
+flag; the process must be able to launch what the config names (e.g. `uvx`).
+The committed `compose.yaml` ships with the flag commented out because the
+default container image carries no MCP launchers — mount your config and a
+suitable image layer to enable it.
 
 ## License
 

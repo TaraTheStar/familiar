@@ -237,6 +237,11 @@ func main() {
 	// Vision callback: device POSTs camera captures here when the LLM
 	// calls self.camera.take_photo. Requires a multimodal LLM (we reuse
 	// the same -llm-url; gemma4 with mmproj works fine).
+	//
+	// NOTE: /vision is unauthenticated — each POST burns a multimodal LLM
+	// call, so keep the port LAN-only (the compose deployment does). Auth
+	// would need the device to send a token with its capture, which the wire
+	// doesn't carry today.
 	if *visionURL != "" && llmClient != nil {
 		mux.HandleFunc("/vision", vision.Handler(vision.Config{
 			LLM:    llmClient,

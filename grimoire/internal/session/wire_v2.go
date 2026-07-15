@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -22,6 +23,12 @@ import (
 // hello when none is configured (§5.1): 40 frames ≈ 2.4s at 60ms, matching the
 // ESP32's fixed 40-packet decoder buffer.
 const defaultAudioCredit = 40
+
+// tailPadTimeout bounds SpeakEnd's whole tail-pad loop. Credit for the pad
+// normally arrives within about the pad's own duration (the device drains its
+// buffer in real time), so a healthy device finishes well inside this; it only
+// fires when a device stops granting credit while keeping the socket chatty.
+const tailPadTimeout = 5 * time.Second
 
 // v2Out implements deviceOut (and creditSink) for Protocol v2. Where v1 paces
 // audio against a wall clock, v2 gates each binary frame on credit-based flow
@@ -185,10 +192,14 @@ func (o *v2Out) AddCredit(frames int) {
 	}
 }
 
-// SpeakEnd closes the audio stream and releases the wire lock. No-op if no
-// reply was open, so it is safe to defer unconditionally. There is no pacing
-// drain (unlike v1) — the device leaves the speaking state when its own buffer
-// empties.
+// SpeakEnd closes the audio stream and releases the wire lock. It must only be
+// called after a successful SpeakBegin, by the same reply — which therefore
+// holds mu. Calling it from a reply that never began would read started
+// unsynchronized and unlock a mutex some other reply holds (callers guard on
+// their own begin state; see streamReply/speakReply). The started check is a
+// last-resort guard, valid only because the caller holds mu. There is no
+// pacing drain (unlike v1) — the device leaves the speaking state when its own
+// buffer empties.
 //
 // A cancelled context means the turn was interrupted (barge-in / session
 // teardown): the stream is aborted with audio_cancel so the device flushes its
@@ -215,10 +226,16 @@ func (o *v2Out) SpeakEnd(ctx context.Context) error {
 	// Tail pad: append a short run of silent frames so the device's (drain-less)
 	// exit from the speaking state clips trailing silence, not the last word.
 	// Best-effort — a credit/write failure here must not block the normal close.
+	// The pad rides on device credit, so the whole loop is bounded by a
+	// deadline: a device that stops granting audio_credit (while keeping the
+	// socket alive) must not wedge SpeakEnd — which holds mu — forever. Silence
+	// is expendable; on timeout we just close the utterance.
 	if o.tailPadFrames > 0 {
+		padCtx, cancelPad := context.WithTimeout(ctx, tailPadTimeout)
+		defer cancelPad()
 		silence := make([]int16, o.encoder.SamplesPerFrame())
 		for i := 0; i < o.tailPadFrames; i++ {
-			if err := o.acquireCredit(ctx); err != nil {
+			if err := o.acquireCredit(padCtx); err != nil {
 				break
 			}
 			opusBytes, err := o.encoder.Encode(silence)
