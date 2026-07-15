@@ -181,8 +181,24 @@ esp_err_t Ota::CheckVersion() {
             }
         }
         has_websocket_config_ = true;
-    } else {
-        ESP_LOGI(TAG, "No websocket section found!");
+    }
+
+    // Protocol v2 discovery (PROTOCOL_V2 §2.1): the lean `{ws_url, firmware?}`
+    // shape served at GET /discover. Accepting it here means the configured
+    // OTA URL can point either at the legacy rich response (/grimoire/ota/)
+    // or straight at /discover — the v2-native boot path. server_time is
+    // deliberately absent from this shape (the clock comes from the WS hello).
+    cJSON *ws_url = cJSON_GetObjectItem(root, "ws_url");
+    if (cJSON_IsString(ws_url)) {
+        Settings settings("websocket", true);
+        if (settings.GetString("url") != ws_url->valuestring) {
+            settings.SetString("url", ws_url->valuestring);
+        }
+        has_websocket_config_ = true;
+    }
+
+    if (!has_websocket_config_) {
+        ESP_LOGI(TAG, "No websocket section or ws_url found!");
     }
 
     has_server_time_ = false;

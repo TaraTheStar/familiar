@@ -79,7 +79,19 @@ FaceDetector& FaceDetector::getInstance()
 
 void FaceDetector::start()
 {
-    if (_task_handle != nullptr) return;
+    if (_task_handle != nullptr) {
+        // A previous stop() timed out before the task exited. Reap it now if
+        // it has finished since (it gives _stop_sem on exit); otherwise it's
+        // still winding down — refuse to double-create.
+        if (_stop_sem != nullptr && xSemaphoreTake(_stop_sem, 0) == pdTRUE) {
+            _task_handle = nullptr;
+            vSemaphoreDelete(_stop_sem);
+            _stop_sem = nullptr;
+        } else {
+            ESP_LOGW(TAG, "Face detector still stopping; start ignored");
+            return;
+        }
+    }
     _running.store(true, std::memory_order_release);
     _stop_sem = xSemaphoreCreateBinary();
 
@@ -92,7 +104,15 @@ void FaceDetector::stop()
     _running.store(false, std::memory_order_release);
     _enabled.store(false, std::memory_order_release);
     if (_task_handle) {
-        xSemaphoreTake(_stop_sem, pdMS_TO_TICKS(2000));
+        if (xSemaphoreTake(_stop_sem, pdMS_TO_TICKS(2000)) != pdTRUE) {
+            // The task is still running (likely mid-processFrame) and WILL
+            // give _stop_sem when it exits. Deleting the semaphore here would
+            // make that give a use-after-free, and nulling the handle would
+            // let start() double-create the task. Keep both; the next start()
+            // or stop() reaps once the task has actually exited.
+            ESP_LOGW(TAG, "Face detector task didn't stop within 2s; deferring cleanup");
+            return;
+        }
         _task_handle = nullptr;
     }
     if (_stop_sem) {

@@ -194,8 +194,11 @@ void Hal::startXiaozhi()
         hal_bridge::app_play_sound(OGG_NEW_NOTIFICATION);
     });
 
-    // Start stackchan update task
-    xTaskCreatePinnedToCore(_stackchan_update_task, "stackchan", 4096, NULL, 5, NULL, 1);
+    // Start stackchan update task. 6 KB stack: the deepest path (modifier
+    // update → StateManager::setState → fmt logging + SendEvent's snprintf +
+    // Schedule lambda) was uncomfortably close to the old 4 KB — check
+    // uxTaskGetStackHighWaterMark before trimming.
+    xTaskCreatePinnedToCore(_stackchan_update_task, "stackchan", 6144, NULL, 5, NULL, 1);
 
     hal_bridge::start_xiaozhi_app();
 }

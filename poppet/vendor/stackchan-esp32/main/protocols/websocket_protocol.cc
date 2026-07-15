@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cJSON.h>
 #include <esp_log.h>
+#include <sdkconfig.h>
 #include <esp_app_desc.h>
 #include <sys/time.h>
 #include "assets/lang_config.h"
@@ -100,8 +101,12 @@ bool WebsocketProtocol::OpenAudioChannel() {
                 }));
             }
         } else {
-            // Parse JSON data
-            auto root = cJSON_Parse(data);
+            // Parse JSON data. The transport hands us a raw (data, len) view
+            // with NO NUL terminator — cJSON_Parse and %s both run strlen past
+            // the end otherwise (heap OOB read, sporadic crash). Copy into a
+            // terminated string first.
+            std::string json(data, len);
+            auto root = cJSON_Parse(json.c_str());
             auto type = cJSON_GetObjectItem(root, "type");
             if (cJSON_IsString(type)) {
                 if (strcmp(type->valuestring, "hello") == 0) {
@@ -112,7 +117,16 @@ bool WebsocketProtocol::OpenAudioChannel() {
                     }
                 }
             } else {
-                ESP_LOGE(TAG, "Missing message type, data: %s", data);
+                // Malformed frame (unparseable JSON or no `type`): report a
+                // standalone PROTOCOL_VIOLATION (§9.4) so the server gets
+                // visibility, and keep the session alive. Frames with an
+                // *unknown* type string are NOT errors — receivers must
+                // tolerate those for forward compatibility (§4.1); the
+                // dispatcher just logs them.
+                ESP_LOGE(TAG, "Missing message type, data: %s", json.c_str());
+                SendText(root == nullptr
+                             ? R"({"type":"error","code":"PROTOCOL_VIOLATION","message":"unparseable JSON frame"})"
+                             : R"({"type":"error","code":"PROTOCOL_VIOLATION","message":"frame missing type field"})");
             }
             cJSON_Delete(root);
         }
@@ -172,7 +186,8 @@ std::string WebsocketProtocol::GetHelloMessage() {
     cJSON_AddItemToObject(root, "client", client);
 
     // The server dictates audio params (§3.2); these are the device's fixed
-    // hardware: 16k mic in, 24k TTS out, 60ms Opus frames.
+    // hardware: 16k mic in, 16k TTS out (playback is AEC-locked to the mic
+    // rate — PROTOCOL_V2 §1), 60ms Opus frames.
     cJSON* audio = cJSON_CreateObject();
     cJSON* in = cJSON_CreateObject();
     cJSON_AddStringToObject(in, "codec", "opus");
@@ -182,7 +197,7 @@ std::string WebsocketProtocol::GetHelloMessage() {
     cJSON_AddItemToObject(audio, "in", in);
     cJSON* out = cJSON_CreateObject();
     cJSON_AddStringToObject(out, "codec", "opus");
-    cJSON_AddNumberToObject(out, "rate", 24000);
+    cJSON_AddNumberToObject(out, "rate", 16000);
     cJSON_AddNumberToObject(out, "channels", 1);
     cJSON_AddNumberToObject(out, "frame_ms", OPUS_FRAME_DURATION_MS);
     cJSON_AddItemToObject(audio, "out", out);
@@ -191,6 +206,13 @@ std::string WebsocketProtocol::GetHelloMessage() {
     // features: v2 retires v1's "mcp"/"aec" tokens — tools are first-class (§6).
     cJSON* features = cJSON_CreateArray();
     cJSON_AddItemToArray(features, cJSON_CreateString("tools"));
+#if CONFIG_SEND_WAKE_WORD_DATA
+    // wake_word_audio (§4.2): we stream the buffered pre-roll after wake, so
+    // the server must open the turn's audio window at wake rather than at
+    // listen_start. Advertised only when the pre-roll path is compiled in —
+    // without the advert the server discards pre-wake frames as orphans.
+    cJSON_AddItemToArray(features, cJSON_CreateString("wake_word_audio"));
+#endif
     cJSON_AddItemToObject(root, "features", features);
 
     // telemetry_events: advisory list of perception events this firmware emits
@@ -200,6 +222,7 @@ std::string WebsocketProtocol::GetHelloMessage() {
         "face_identified_rejected", "sound_event", "head_pet_started",
         "head_pet_ended", "state_changed", "chat_status", "idle_motion",
         "dance_started", "dance_ended", "sleep_pose", "security_pose",
+        "battery_low",  // §4.8: the one event the server acts on (→ alert)
     };
     cJSON* telemetry_events = cJSON_CreateArray();
     for (auto* ev : kTelemetryEvents) {

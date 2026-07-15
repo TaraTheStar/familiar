@@ -7,6 +7,7 @@
 #include <esp_timer.h>
 
 #include <string>
+#include <atomic>
 #include <mutex>
 #include <deque>
 #include <memory>
@@ -150,8 +151,26 @@ private:
     bool aborted_ = false;
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
-    bool privacy_gate_ = false;  // Sleep-mode: mic + wake word off, pinned to Idle
+    // Sleep-mode: mic + wake word off, pinned to Idle. Atomic because
+    // SetDeviceState (callable from any task) reads it while SetPrivacyGate
+    // flips it from the stackchan update task.
+    std::atomic<bool> privacy_gate_{false};
+    // True between audio_begin and audio_end/audio_cancel (§4.4). Flipped
+    // directly on the WS receive task and used there to gate binary TTS
+    // frames. Gating on the Speaking device state instead (as stock did)
+    // dropped head-of-utterance frames whenever the main task was slow to run
+    // the Scheduled state change (e.g. blocked in WaitForPlaybackQueueEmpty
+    // during the previous utterance's Listening entry).
+    std::atomic<bool> utterance_open_{false};
     int clock_ticks_ = 0;
+    // Exponential backoff for the idle-channel proactive reconnect (see the
+    // clock-tick handler): remaining hold-off seconds and consecutive-failure
+    // count. Main task only.
+    int idle_reconnect_holdoff_ticks_ = 0;
+    int idle_reconnect_failures_ = 0;
+    // battery_low telemetry sent for the current discharge-crossing; re-armed
+    // by charging or level recovery (clock-tick handler). Main task only.
+    bool battery_low_sent_ = false;
     TaskHandle_t activation_task_handle_ = nullptr;
 
 

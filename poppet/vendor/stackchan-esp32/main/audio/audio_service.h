@@ -135,11 +135,13 @@ public:
         stereo_frame_callback_ = std::move(cb);
     }
 
-    // Protocol v2 audio flow control (§5): fires each time a decoded TTS packet
-    // is consumed off the decode queue, so the protocol layer can grant the
-    // server more send credit. Runs on the opus codec task; the subscriber must
-    // be cheap and thread-aware (it sends a WS frame in batches).
-    void OnDecodeFrameConsumed(std::function<void()> cb) {
+    // Protocol v2 audio flow control (§5): fires with the number of SERVER
+    // TTS packets consumed off the decode queue (1 per decode) or flushed
+    // without playing (ResetDecoder, in bulk), so the protocol layer can grant
+    // the server more send credit. Local audio (PlaySound) never fires it.
+    // Runs on the opus codec task (or whichever task flushed); the subscriber
+    // must be cheap and thread-aware (it sends a WS frame in batches).
+    void OnDecodeFrameConsumed(std::function<void(int frames)> cb) {
         decode_frame_consumed_callback_ = std::move(cb);
     }
 
@@ -156,7 +158,7 @@ private:
     // Dotty: stereo frame callback for ambient sound localization.
     std::function<void(const std::vector<int16_t>&)> stereo_frame_callback_;
     // Protocol v2 flow control: decode-queue consumption callback.
-    std::function<void()> decode_frame_consumed_callback_;
+    std::function<void(int frames)> decode_frame_consumed_callback_;
     std::unique_ptr<AudioProcessor> audio_processor_;
     std::unique_ptr<WakeWord> wake_word_;
     std::unique_ptr<AudioDebugger> audio_debugger_;
@@ -193,6 +195,19 @@ private:
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
     // For server AEC
     std::deque<uint32_t> timestamp_queue_;
+
+    // Playback-direction frames popped from a queue but not yet landed (a
+    // packet mid-decode, or PCM mid-OutputData). The queues alone understate
+    // pending audio by up to one frame per task — WaitForPlaybackQueueEmpty
+    // waking in that gap let the speak→listen transition's ResetDecoder flush
+    // the final TTS frame (the "clipped last word" bug). Guarded by
+    // audio_queue_mutex_.
+    int playback_inflight_ = 0;
+    // Bumped by ResetDecoder. A decode finishing across a reset compares its
+    // pop-time epoch and drops its PCM instead of pushing it — otherwise the
+    // stale frame would play after listening started. Guarded by
+    // audio_queue_mutex_.
+    uint32_t playback_epoch_ = 0;
 
     bool wake_word_initialized_ = false;
     bool audio_processor_initialized_ = false;

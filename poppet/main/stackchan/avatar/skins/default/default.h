@@ -18,6 +18,11 @@ namespace stackchan::avatar {
  */
 class DefaultAvatar : public Avatar {
 public:
+    ~DefaultAvatar() override
+    {
+        teardown();  // features/decorators go before _pannel, their LVGL parent
+    }
+
     lv_color_t primaryColor   = lv_color_white();
     lv_color_t secondaryColor = lv_color_black();
 

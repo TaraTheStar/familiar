@@ -74,25 +74,33 @@ bool Application::SetDeviceState(DeviceState state) {
 // pinned to Idle (see SetDeviceState + HandleStateChangedEvent). Called by
 // the StackChan state manager on sleep entry/exit.
 void Application::SetPrivacyGate(bool on) {
-    if (privacy_gate_ == on) {
+    // The flag flips immediately (SetDeviceState reads it from any task, and
+    // sleep entry must refuse mic-arming transitions from this moment), but
+    // the AFE pipeline mutations are marshalled onto the main task:
+    // EnableVoiceProcessing / EnableWakeWordDetection have no internal
+    // locking, and the main task drives the same calls from
+    // HandleStateChangedEvent — while our callers (StateManager sleep
+    // entry/exit, e.g. the head-pet path) arrive on the stackchan update task.
+    if (privacy_gate_.exchange(on) == on) {
         return;
     }
-    privacy_gate_ = on;
-    if (on) {
-        ESP_LOGI(TAG, "privacy gate ON: mic + wake word disabled");
-        // Drop out of any conversation. If we were Listening/Speaking this
-        // transition fires HandleStateChangedEvent's gated Idle path (mic +
-        // wake off, display left alone). If we were already Idle the
-        // transition is a no-op, so disable here too.
-        SetDeviceState(kDeviceStateIdle);
-        audio_service_.EnableVoiceProcessing(false);
-        audio_service_.EnableWakeWordDetection(false);
-    } else {
-        ESP_LOGI(TAG, "privacy gate OFF: re-arming wake word");
-        // We're pinned to Idle, so SetDeviceState(Idle) would be a no-op and
-        // wouldn't re-fire the listener — re-arm wake word detection directly.
-        audio_service_.EnableWakeWordDetection(true);
-    }
+    Schedule([this, on]() {
+        if (on) {
+            ESP_LOGI(TAG, "privacy gate ON: mic + wake word disabled");
+            // Drop out of any conversation. If we were Listening/Speaking this
+            // transition fires HandleStateChangedEvent's gated Idle path (mic +
+            // wake off, display left alone). If we were already Idle the
+            // transition is a no-op, so disable here too.
+            SetDeviceState(kDeviceStateIdle);
+            audio_service_.EnableVoiceProcessing(false);
+            audio_service_.EnableWakeWordDetection(false);
+        } else {
+            ESP_LOGI(TAG, "privacy gate OFF: re-arming wake word");
+            // We're pinned to Idle, so SetDeviceState(Idle) would be a no-op and
+            // wouldn't re-fire the listener — re-arm wake word detection directly.
+            audio_service_.EnableWakeWordDetection(true);
+        }
+    });
 }
 
 void Application::Initialize() {
@@ -292,6 +300,31 @@ void Application::Run() {
                 SystemInfo::PrintHeapStats();
             }
 
+            // battery_low telemetry (PROTOCOL_V2 §4.8): the one event the
+            // server acts on (it answers with a "charge me" alert). Checked
+            // once a minute; emitted once per discharge-crossing below the
+            // threshold, re-armed by charging or recovering above the
+            // hysteresis band so it doesn't spam on a level wobbling at the
+            // threshold. SendEvent lazy-opens the channel from idle, which is
+            // exactly what we want — a sleeping-on-the-shelf robot can still
+            // call for its charger.
+            if (clock_ticks_ % 60 == 0) {
+                int level = 0;
+                bool charging = false, discharging = false;
+                auto& board = Board::GetInstance();
+                if (board.GetBatteryLevel(level, charging, discharging)) {
+                    constexpr int kBatteryLowPercent = 20;
+                    constexpr int kBatteryRearmPercent = 25;
+                    if (charging || level >= kBatteryRearmPercent) {
+                        battery_low_sent_ = false;
+                    } else if (level <= kBatteryLowPercent && !battery_low_sent_) {
+                        battery_low_sent_ = true;
+                        SendEvent("battery_low",
+                                  "{\"percent\":" + std::to_string(level) + "}");
+                    }
+                }
+            }
+
             // Dotty: proactive WS reconnect on idle-channel timeout.
             // IsTimeout() flips at 120 s of silence on the channel, but
             // the OS-level TCP teardown can take another ~45 s on top of
@@ -299,14 +332,31 @@ void Application::Run() {
             // walk-up events until a manual nudge re-opens the channel.
             // While idle, eagerly close+reopen so the next SendEvent /
             // wake-word / listen path finds a live channel waiting.
+            //
+            // Close+open run inline on this (main) task and can block for
+            // seconds while the server is unreachable (connect + hello wait),
+            // stalling wake-word/tool/schedule processing — so back off
+            // exponentially on consecutive failures (30 s → 60 → 120 → … →
+            // 480 s cap) instead of stalling every 30 s until the server
+            // returns. Any success resets the backoff.
             if (clock_ticks_ % 30 == 0 &&
                 GetDeviceState() == kDeviceStateIdle &&
                 protocol_ != nullptr &&
                 protocol_->IsTimeout()) {
-                ESP_LOGW(TAG, "Idle channel timeout — proactive close+reopen");
-                protocol_->CloseAudioChannel();
-                if (!protocol_->OpenAudioChannel()) {
-                    ESP_LOGW(TAG, "Idle channel reopen failed; will retry next cycle");
+                if (idle_reconnect_holdoff_ticks_ > 0) {
+                    idle_reconnect_holdoff_ticks_ -= 30;
+                } else {
+                    ESP_LOGW(TAG, "Idle channel timeout — proactive close+reopen");
+                    protocol_->CloseAudioChannel();
+                    if (protocol_->OpenAudioChannel()) {
+                        idle_reconnect_failures_ = 0;
+                    } else {
+                        idle_reconnect_failures_++;
+                        int shift = idle_reconnect_failures_ < 4 ? idle_reconnect_failures_ : 4;
+                        idle_reconnect_holdoff_ticks_ = 30 * (1 << shift);
+                        ESP_LOGW(TAG, "Idle channel reopen failed; next retry in %d s",
+                                 idle_reconnect_holdoff_ticks_ + 30);
+                    }
                 }
             }
         }
@@ -551,24 +601,44 @@ void Application::InitializeProtocol() {
     });
     
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking) {
-            audio_service_.PushPacketToDecodeQueue(std::move(packet));
+        // Gate on the WS-task-owned utterance flag, not the device state: the
+        // Speaking transition runs via Schedule on the main task, which can be
+        // blocked (WaitForPlaybackQueueEmpty during the previous utterance's
+        // Listening entry) for seconds — every head-of-utterance frame in that
+        // window would be dropped.
+        packet->from_server = true;
+        bool queued = false;
+        if (utterance_open_.load()) {
+            queued = audio_service_.PushPacketToDecodeQueue(std::move(packet));
+        }
+        if (!queued) {
+            // Dropped (no open utterance, or decode queue full): the frame
+            // consumed server send budget (§5), so credit it back — otherwise
+            // the server's window shrinks permanently with every drop.
+            Schedule([this]() {
+                if (protocol_) {
+                    protocol_->NotifyAudioFrameConsumed(1);
+                }
+            });
         }
     });
 
     // Protocol v2 audio flow control (§5): grant the server more send credit as
-    // decoded TTS frames drain off the decode queue. The hook fires on the opus
-    // codec task, so marshal onto the main task (via Schedule) to serialize the
-    // audio_credit send with every other WS send — Protocol batches the grants.
-    audio_service_.OnDecodeFrameConsumed([this]() {
-        Schedule([this]() {
+    // decoded TTS frames drain off the decode queue (or get flushed by a
+    // ResetDecoder, in bulk). The hook fires on the opus codec task (or the
+    // flushing task), so marshal onto the main task (via Schedule) to serialize
+    // the audio_credit send with every other WS send — Protocol batches the
+    // grants.
+    audio_service_.OnDecodeFrameConsumed([this](int frames) {
+        Schedule([this, frames]() {
             if (protocol_) {
-                protocol_->NotifyAudioFrameConsumed();
+                protocol_->NotifyAudioFrameConsumed(frames);
             }
         });
     });
     
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
+        utterance_open_.store(false);  // fresh session, no utterance in flight
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
@@ -577,6 +647,7 @@ void Application::InitializeProtocol() {
     });
     
     protocol_->OnAudioChannelClosed([this, &board]() {
+        utterance_open_.store(false);
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
@@ -606,17 +677,41 @@ void Application::InitializeProtocol() {
                 });
             }
         } else if (strcmp(type->valuestring, "display") == 0) {
-            // Avatar display (§4.5). Apply emotion; status is advisory UI in v2
-            // (device speaking/listening state is driven by audio_begin/end).
+            // Avatar display (§4.5). Apply emotion; honor status for the
+            // tokens that map onto a device status concept. The device state
+            // machine also drives SetStatus on its own transitions, so these
+            // are duplicates of transitions about to happen anyway — the
+            // branches are idempotent. "thinking" is deliberately unmapped
+            // (no device status exists for it; the thinking *emotion*, sent
+            // alongside, drives the overlay), and unknown tokens are ignored
+            // rather than fed to SetStatus, whose fallback would paint the
+            // raw token into the speech bubble.
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(emotion)) {
                 Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
                     display->SetEmotion(emotion_str.c_str());
                 });
             }
+            auto status = cJSON_GetObjectItem(root, "status");
+            if (cJSON_IsString(status)) {
+                const char* mapped = nullptr;
+                if (strcmp(status->valuestring, "listening") == 0) {
+                    mapped = Lang::Strings::LISTENING;
+                } else if (strcmp(status->valuestring, "speaking") == 0) {
+                    mapped = Lang::Strings::SPEAKING;
+                }
+                if (mapped != nullptr) {
+                    Schedule([display, mapped]() {
+                        display->SetStatus(mapped);
+                    });
+                }
+            }
         } else if (strcmp(type->valuestring, "audio_begin") == 0) {
-            // Server is about to stream TTS Opus frames (§4.4): enter Speaking
-            // so OnIncomingAudio enqueues the frames that follow.
+            // Server is about to stream TTS Opus frames (§4.4). Open the
+            // utterance gate HERE, on the WS task, so the frames that follow
+            // in this same socket stream are accepted immediately — the
+            // Speaking state transition below runs via Schedule and may lag.
+            utterance_open_.store(true);
             Schedule([this]() {
                 aborted_ = false;
                 if (GetDeviceState() != kDeviceStateSpeaking) {
@@ -624,7 +719,10 @@ void Application::InitializeProtocol() {
                 }
             });
         } else if (strcmp(type->valuestring, "audio_end") == 0) {
-            // TTS stream finished normally (§4.4): leave Speaking.
+            // TTS stream finished normally (§4.4): leave Speaking. The gate
+            // closes on the WS task — no frames follow audio_end (§4.4), and
+            // anything that does arrive is a stray to drop-and-credit.
+            utterance_open_.store(false);
             Schedule([this]() {
                 if (GetDeviceState() == kDeviceStateSpeaking) {
                     // Privacy gate (sleep): after a farewell finishes, go back
@@ -641,6 +739,7 @@ void Application::InitializeProtocol() {
             // Server cancelled the in-flight reply (barge-in confirmation,
             // §4.4): flush queued audio so nothing stale plays, then leave
             // Speaking.
+            utterance_open_.store(false);
             Schedule([this]() {
                 audio_service_.ResetDecoder();
                 if (GetDeviceState() == kDeviceStateSpeaking) {
@@ -671,7 +770,32 @@ void Application::InitializeProtocol() {
             auto message = cJSON_GetObjectItem(root, "message");
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(title) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
-                Alert(title->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::OGG_VIBRATION);
+                // sound values are firmware-specific (§4.6): map the tokens we
+                // have assets for; anything else (or absent) falls back to the
+                // vibration chirp.
+                std::string_view sound = Lang::Sounds::OGG_VIBRATION;
+                auto sound_field = cJSON_GetObjectItem(root, "sound");
+                if (cJSON_IsString(sound_field)) {
+                    const char* s = sound_field->valuestring;
+                    if (strcmp(s, "popup") == 0) {
+                        sound = Lang::Sounds::OGG_POPUP;
+                    } else if (strcmp(s, "success") == 0) {
+                        sound = Lang::Sounds::OGG_SUCCESS;
+                    } else if (strcmp(s, "exclamation") == 0) {
+                        sound = Lang::Sounds::OGG_EXCLAMATION;
+                    } else if (strcmp(s, "low_battery") == 0) {
+                        sound = Lang::Sounds::OGG_LOW_BATTERY;
+                    }
+                }
+                // Marshal off the WS receive task: Alert takes the LVGL lock
+                // and PlaySound pushes with wait=true — behind a full decode
+                // queue during active TTS that would block the socket reader
+                // and stall every inbound frame.
+                Schedule([this, t = std::string(title->valuestring),
+                          m = std::string(message->valuestring),
+                          e = std::string(emotion->valuestring), sound]() {
+                    Alert(t.c_str(), m.c_str(), e.c_str(), sound);
+                });
             } else {
                 ESP_LOGW(TAG, "Alert requires title, message and emotion");
             }
@@ -952,12 +1076,15 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
 #if CONFIG_SEND_WAKE_WORD_DATA
-    // Encode and send the wake word data to the server
+    // Pre-roll ordering per PROTOCOL_V2 §4.2: wake FIRST — it opens the
+    // server's pre-roll window — then the buffered wake-word audio, then
+    // listen_start (via SetListeningMode) attaches the mode's endpointer.
+    // Stock v2.2.4 sent the packets before wake; the server has no window
+    // open at that point and silently discards them (§7).
+    protocol_->SendWakeWordDetected(wake_word);
     while (auto packet = audio_service_.PopWakeWordPacket()) {
         protocol_->SendAudio(std::move(packet));
     }
-    // Set the chat state to wake word detected
-    protocol_->SendWakeWordDetected(wake_word);
 
     // Set flag to play popup sound after state changes to listening
     play_popup_on_listening_ = true;
@@ -1163,16 +1290,20 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
     if (state == kDeviceStateIdle) {
         audio_service_.EncodeWakeWord();
 
-        if (!protocol_->IsAudioChannelOpened()) {
-            SetDeviceState(kDeviceStateConnecting);
-            // Schedule to let the state change be processed first (UI update)
-            Schedule([this, wake_word]() {
-                ContinueWakeWordInvoke(wake_word);
-            });
-            return;
-        }
-        // Channel already opened, continue directly
-        ContinueWakeWordInvoke(wake_word);
+        // Always go through Connecting + Schedule, exactly like the AFE wake
+        // path (HandleWakeWordDetectedEvent): stock v2.2.4's synchronous
+        // fast-path for an already-open channel skipped the state set, so
+        // ContinueWakeWordInvoke's Connecting-check early-returned and the
+        // invoke silently no-oped — and since SendEvent lazy-opens the channel
+        // from idle, "already open" is the common case here. This is what
+        // killed the walk-up face greeting and the head-pet hold-to-listen.
+        // Scheduling also moves the blocking pre-roll/OpenAudioChannel work
+        // off the caller's task (face/pet invokes arrive on the stackchan
+        // update task, which holds the LVGL lock).
+        SetDeviceState(kDeviceStateConnecting);
+        Schedule([this, wake_word]() {
+            ContinueWakeWordInvoke(wake_word);
+        });
     } else if (state == kDeviceStateSpeaking) {
         Schedule([this]() {
             AbortSpeaking(kAbortReasonNone);

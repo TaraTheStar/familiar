@@ -101,8 +101,12 @@ void Protocol::SendAudioCredit(int frames) {
     SendText("{\"type\":\"audio_credit\",\"frames\":" + std::to_string(frames) + "}");
 }
 
-void Protocol::NotifyAudioFrameConsumed() {
-    if (++frames_consumed_since_grant_ >= kAudioCreditBatch) {
+void Protocol::NotifyAudioFrameConsumed(int frames) {
+    if (frames <= 0) {
+        return;
+    }
+    frames_consumed_since_grant_ += frames;
+    if (frames_consumed_since_grant_ >= kAudioCreditBatch) {
         SendAudioCredit(frames_consumed_since_grant_);
         frames_consumed_since_grant_ = 0;
     }

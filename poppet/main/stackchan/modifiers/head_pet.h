@@ -21,6 +21,7 @@
 #include "../avatar/decorators/decorators.h"
 #include <hal/hal.h>
 #include <cstdint>
+#include <atomic>
 
 namespace stackchan {
 
@@ -45,11 +46,13 @@ private:
     // over immediately after.
     void flashWakeFeedback(Modifiable& stackchan);
 
-    // Signals
+    // Signals. Atomics, not volatile: set from the head-touch task, consumed
+    // (exchange) on the stackchan update task — a plain read-then-clear could
+    // lose a gesture that lands between the read and the clear.
     int _signal_connection;
-    volatile bool _event_press   = false;
-    volatile bool _event_swipe   = false;
-    volatile bool _event_release = false;
+    std::atomic<bool> _event_press{false};
+    std::atomic<bool> _event_swipe{false};
+    std::atomic<bool> _event_release{false};
 
     // Affect state machine
     bool _in_happy_state     = false;

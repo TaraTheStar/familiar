@@ -11,6 +11,7 @@
 #include <mooncake.h>
 #include <settings.h>
 #include <esp_mac.h>
+#include <cstring>
 
 static const std::string_view _tag = "HAL-BLE";
 
@@ -208,7 +209,10 @@ private:
         const char* ssid     = data["ssid"];
         const char* password = data["password"];
 
-        mclog::tagInfo(_tag, "get wifi config: {} / {}", ssid, password);
+        // Log the SSID only — the password must not land in the serial log
+        // (anyone with the monitor attached would see it in plaintext).
+        mclog::tagInfo(_tag, "get wifi config: ssid={} (password redacted, {} chars)",
+                       ssid, password ? strlen(password) : 0);
 
         // Notify state: connecting
         notify_state(0, "wifiConnecting");

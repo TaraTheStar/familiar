@@ -304,6 +304,7 @@ void AudioService::AudioOutputTask() {
 
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
+        playback_inflight_++;
         audio_queue_cv_.notify_all();
         lock.unlock();
 
@@ -319,13 +320,15 @@ void AudioService::AudioOutputTask() {
         last_output_time_ = std::chrono::steady_clock::now();
         debug_statistics_.playback_count++;
 
+        lock.lock();
+        playback_inflight_--;
 #if CONFIG_USE_SERVER_AEC
         /* Record the timestamp for server AEC */
         if (task->timestamp > 0) {
-            lock.lock();
             timestamp_queue_.push_back(task->timestamp);
         }
 #endif
+        audio_queue_cv_.notify_all();
     }
 
     ESP_LOGW(TAG, "Audio output task stopped");
@@ -347,13 +350,16 @@ void AudioService::OpusCodecTask() {
         if (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) {
             auto packet = std::move(audio_decode_queue_.front());
             audio_decode_queue_.pop_front();
+            playback_inflight_++;
+            const uint32_t pop_epoch = playback_epoch_;
             audio_queue_cv_.notify_all();
             lock.unlock();
 
             // Protocol v2 flow control (§5): a server→device frame just left the
             // decode queue — credit it back so the server's send budget refills.
-            if (decode_frame_consumed_callback_) {
-                decode_frame_consumed_callback_();
+            // Local frames (PlaySound) don't mint credit.
+            if (packet->from_server && decode_frame_consumed_callback_) {
+                decode_frame_consumed_callback_(1);
             }
 
             auto task = std::make_unique<AudioTask>();
@@ -391,7 +397,12 @@ void AudioService::OpusCodecTask() {
                         task->pcm = std::move(resampled);
                     }
                     lock.lock();
-                    audio_playback_queue_.push_back(std::move(task));
+                    if (pop_epoch == playback_epoch_) {
+                        audio_playback_queue_.push_back(std::move(task));
+                    }
+                    // else: ResetDecoder ran while this frame was mid-decode;
+                    // it belongs to the flushed utterance, so drop it rather
+                    // than play it after the reset.
                     audio_queue_cv_.notify_all();
                     debug_statistics_.decode_count++;
                 } else {
@@ -402,6 +413,8 @@ void AudioService::OpusCodecTask() {
                 ESP_LOGE(TAG, "Audio decoder is not configured");
                 lock.lock();
             }
+            playback_inflight_--;
+            audio_queue_cv_.notify_all();
             debug_statistics_.decode_count++;
         }
         /* Encode the audio to send queue */
@@ -672,24 +685,47 @@ bool AudioService::IsIdle() {
 }
 
 void AudioService::WaitForPlaybackQueueEmpty() {
+    // playback_inflight_ covers frames the tasks popped but haven't finished
+    // (mid-decode / mid-OutputData): without it this could wake one frame
+    // early and the caller's ResetDecoder would flush the final TTS frame.
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-    audio_queue_cv_.wait(lock, [this]() { 
-        return service_stopped_ || (audio_decode_queue_.empty() && audio_playback_queue_.empty()); 
+    audio_queue_cv_.wait(lock, [this]() {
+        return service_stopped_ ||
+            (audio_decode_queue_.empty() && audio_playback_queue_.empty() && playback_inflight_ == 0);
     });
 }
 
 void AudioService::ResetDecoder() {
-    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-    std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
-    if (opus_decoder_ != nullptr) {
-        esp_opus_dec_reset(opus_decoder_);
+    int server_frames_flushed = 0;
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
+        if (opus_decoder_ != nullptr) {
+            esp_opus_dec_reset(opus_decoder_);
+        }
+        decoder_lock.unlock();
+        for (const auto& packet : audio_decode_queue_) {
+            if (packet->from_server) {
+                server_frames_flushed++;
+            }
+        }
+        timestamp_queue_.clear();
+        audio_decode_queue_.clear();
+        audio_playback_queue_.clear();
+        audio_testing_queue_.clear();
+        // Invalidate any frame currently mid-decode: it belongs to the utterance
+        // being flushed and must not surface in the playback queue post-reset.
+        // (That frame already minted its credit at pop, so no accounting here.)
+        playback_epoch_++;
+        audio_queue_cv_.notify_all();
     }
-    decoder_lock.unlock();
-    timestamp_queue_.clear();
-    audio_decode_queue_.clear();
-    audio_playback_queue_.clear();
-    audio_testing_queue_.clear();
-    audio_queue_cv_.notify_all();
+    // Credit back the flushed server frames (§5): they consumed server send
+    // budget but will never hit the consumed path — without this, every
+    // barge-in / audio_cancel / speak→listen flush permanently shrinks the
+    // server's send window until TTS stalls mid-utterance.
+    if (server_frames_flushed > 0 && decode_frame_consumed_callback_) {
+        decode_frame_consumed_callback_(server_frames_flushed);
+    }
 }
 
 void AudioService::CheckAndUpdateAudioPowerState() {

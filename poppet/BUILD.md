@@ -59,13 +59,14 @@ Under the **Xiaozhi Assistant** menu (upstream's Kconfig menu name — unchanged
 the vendored `CONFIG_*` symbols stay stable), set both (they are intentionally
 blank):
 
-- **Default OTA URL** — your self-hosted server, e.g.
-  `http://192.0.2.10:9099/grimoire/ota/`
-  (the device gets its websocket/server address from this OTA response).
-  **Use the `/grimoire/` path** — the server is v2-only and serves `/grimoire/`
-  (the legacy `/xiaozhi/` mount was removed). **Keep the trailing slash:** without
-  it (`…/grimoire/ota`) the server 307-redirects to the slashed path and the ESP
-  OTA client does **not** follow redirects, so the check fails.
+- **Default OTA URL** — your self-hosted server's discovery endpoint, e.g.
+  `http://192.0.2.10:9099/discover`
+  (the device gets its websocket/server address from this response —
+  PROTOCOL_V2 §2.1). The legacy rich shape at `http://…:9099/grimoire/ota/`
+  also still works (the boot client accepts both; the legacy `/xiaozhi/`
+  mount is gone). If you use the legacy path, **keep the trailing slash:**
+  without it (`…/grimoire/ota`) the server 307-redirects to the slashed path
+  and the ESP OTA client does **not** follow redirects, so the check fails.
 - **NTP server 1 (primary)** — your LAN NTP host, e.g. `ntp.lan` or `192.168.x.x`.
   Leave blank only if the coin cell keeps RTC time and you use plain `http://`
   for the server (no TLS clock dependency). NTP 2/3 are optional fallbacks.

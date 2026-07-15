@@ -339,7 +339,13 @@ void StateManager::onEnterSecurity()
         mclog::tagWarn(_tag, "security: stale task handle on entry, tearing down");
         _security_running.store(false, std::memory_order_release);
         if (_security_stop_sem) {
-            xSemaphoreTake(_security_stop_sem, pdMS_TO_TICKS(2000));
+            if (xSemaphoreTake(_security_stop_sem, pdMS_TO_TICKS(2000)) != pdTRUE) {
+                // Old task still winding down; it gives the semaphore on exit,
+                // so deleting it now would be a give-after-free. Skip this
+                // security entry; a later one reaps the semaphore.
+                mclog::tagWarn(_tag, "security: old pan task didn't stop in 2s; entry skipped");
+                return;
+            }
             vSemaphoreDelete(_security_stop_sem);
             _security_stop_sem = nullptr;
         }
@@ -367,11 +373,22 @@ void StateManager::onExitSecurity()
     //    task's own vTaskDelete to land before the next entry.
     _security_running.store(false, std::memory_order_release);
     if (_security_stop_sem) {
-        xSemaphoreTake(_security_stop_sem, pdMS_TO_TICKS(2000));
-        vSemaphoreDelete(_security_stop_sem);
-        _security_stop_sem = nullptr;
+        if (xSemaphoreTake(_security_stop_sem, pdMS_TO_TICKS(2000)) == pdTRUE) {
+            vSemaphoreDelete(_security_stop_sem);
+            _security_stop_sem = nullptr;
+            _security_task_handle = nullptr;
+        } else {
+            // Task still mid-pan (slow path ~4 s): it gives the semaphore on
+            // exit, so deleting it now would be a give-after-free. Keep the
+            // semaphore + handle; the next onEnterSecurity reaps them (its
+            // stale-handle path). The lock release + head-home below are
+            // still safe — the loop exits without further motion once
+            // _security_running is false.
+            mclog::tagWarn(_tag, "security: pan task didn't stop in 2s; deferring cleanup");
+        }
+    } else {
+        _security_task_handle = nullptr;
     }
-    _security_task_handle = nullptr;
     // 2. Release the motion modify lock so the successor state's idle /
     //    chat / dance overlays can drive the head again.
     sc.motion().setModifyLock(false);

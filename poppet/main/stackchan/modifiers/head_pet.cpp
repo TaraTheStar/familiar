@@ -47,8 +47,7 @@ void HeadPetModifier::_update(Modifiable& stackchan)
     // Touch start — emit perception event, arm hold timer.
     // Affect (HeartDecorator + Happy emotion) still runs off swipe events
     // below, unchanged.
-    if (_event_press) {
-        _event_press      = false;
+    if (_event_press.exchange(false)) {
         _is_touched       = true;
         _hold_wake_fired  = false;
         _touch_start_ms   = now;
@@ -62,8 +61,7 @@ void HeadPetModifier::_update(Modifiable& stackchan)
     }
 
     // Affect: handle "being petted" (swipe gestures fire while held).
-    if (_event_swipe) {
-        _event_swipe = false;
+    if (_event_swipe.exchange(false)) {
         handle_swipe(stackchan);
         // While they're still petting, defer the restore.
         _is_waiting_restore = false;
@@ -79,8 +77,7 @@ void HeadPetModifier::_update(Modifiable& stackchan)
     }
 
     // Touch end — emit perception event, clear hold state, schedule restore.
-    if (_event_release) {
-        _event_release   = false;
+    if (_event_release.exchange(false)) {
         _is_touched      = false;
         _hold_wake_fired = false;
         Application::GetInstance().SendEvent("head_pet_ended", "{}");

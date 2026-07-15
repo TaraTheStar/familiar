@@ -16,6 +16,15 @@ namespace stackchan::avatar {
  */
 class Avatar {
 public:
+    // Skins are held and swapped through unique_ptr<Avatar> (set_familiar), so
+    // destruction runs through this base pointer. Concrete skins that own an
+    // LVGL panel must destroy the key elements/decorators BEFORE the panel in
+    // their own destructor (see teardown() and ~FamiliarAvatar/~DefaultAvatar):
+    // C++ destroys derived members (the panel) before base members (the
+    // elements), and lv_obj_del on the panel frees the elements' child objects
+    // first — their wrappers would then delete them a second time.
+    virtual ~Avatar() = default;
+
     /**
      * @brief Update avatar, trigger all elements, decorators and modifiers to update
      *
@@ -126,6 +135,15 @@ public:
 
 protected:
     Avatar() = default;
+
+    // Destroy the base-owned pieces (features, speech bubble, decorators)
+    // while the derived skin's panel — their LVGL parent — is still alive.
+    // Call first thing from the concrete skin's destructor.
+    void teardown()
+    {
+        _decorator_pool.clear();
+        _key_elements = {};
+    }
 
     Emotion _emotion = Emotion::Neutral;
     KeyElements_t _key_elements;

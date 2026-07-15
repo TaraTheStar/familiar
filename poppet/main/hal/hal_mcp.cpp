@@ -253,13 +253,36 @@ void Hal::xiaozhi_mcp_init()
     mcp_server.AddTool("self.robot.get_reminders", "Get list of active reminders.", std::vector<Property>{},
                        [this](const PropertyList& properties) -> ReturnValue {
                            mclog::tagInfo(_tag, "get_reminders");
-                           auto reminders          = tools::get_active_reminders();
+                           auto reminders = tools::get_active_reminders();
+                           // The message is user/LLM-supplied text — escape it
+                           // or a quote/backslash yields malformed JSON.
+                           auto escape_json = [](const std::string& s) {
+                               std::string out;
+                               out.reserve(s.size());
+                               for (char c : s) {
+                                   switch (c) {
+                                       case '"':  out += "\\\""; break;
+                                       case '\\': out += "\\\\"; break;
+                                       case '\n': out += "\\n";  break;
+                                       case '\r': out += "\\r";  break;
+                                       case '\t': out += "\\t";  break;
+                                       default:
+                                           if (static_cast<unsigned char>(c) < 0x20) {
+                                               out += fmt::format("\\u{:04x}", c);
+                                           } else {
+                                               out += c;
+                                           }
+                                   }
+                               }
+                               return out;
+                           };
                            std::string result_json = "[";
                            for (size_t i = 0; i < reminders.size(); ++i) {
                                const auto& r = reminders[i];
                                result_json +=
                                    fmt::format(R"({{"id": {}, "duration_ms": {}, "message": "{}", "repeat": {}}})",
-                                               r.id, r.durationMs, r.message, r.repeat ? "true" : "false");
+                                               r.id, r.durationMs, escape_json(r.message),
+                                               r.repeat ? "true" : "false");
                                if (i < reminders.size() - 1) {
                                    result_json += ", ";
                                }

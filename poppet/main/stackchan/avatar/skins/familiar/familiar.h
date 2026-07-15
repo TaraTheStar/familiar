@@ -68,6 +68,10 @@ private:
 class FamiliarAvatar : public Avatar {
 public:
     explicit FamiliarAvatar(std::string name) : _name(std::move(name)) {}
+    ~FamiliarAvatar() override
+    {
+        teardown();  // features/decorators go before _panel, their LVGL parent
+    }
 
     void init(lv_obj_t* parent, const lv_font_t* font = &lv_font_montserrat_16);
     uitk::lvgl_cpp::Container* getPanel() const;

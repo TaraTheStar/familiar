@@ -11,6 +11,12 @@ struct AudioStreamPacket {
     int sample_rate = 0;
     int frame_duration = 0;
     uint32_t timestamp = 0;
+    // True for server→device TTS frames, false for locally generated audio
+    // (PlaySound OGG). Only server frames participate in v2 credit flow
+    // control (§5): they are credited back when consumed OR dropped, and
+    // local frames must never mint credit (that would inflate the server's
+    // budget past the device's real buffer).
+    bool from_server = false;
     std::vector<uint8_t> payload;
 };
 
@@ -84,10 +90,13 @@ public:
     // Protocol v2 audio flow control (§5): grant the server `frames` more
     // server→device audio frames of send budget.
     virtual void SendAudioCredit(int frames);
-    // Called by the audio service each time a decoded TTS frame is consumed off
-    // the decode queue. Batches grants and emits audio_credit once a batch
-    // accumulates, so the server's send budget never starves.
-    void NotifyAudioFrameConsumed();
+    // Called by the audio service when server TTS frames are consumed off the
+    // decode queue — or flushed/dropped without playing (barge-in ResetDecoder,
+    // state-gate drops), which must also credit back or the server's window
+    // shrinks permanently with each interruption. Batches grants and emits
+    // audio_credit once a batch accumulates, so the server's send budget never
+    // starves.
+    void NotifyAudioFrameConsumed(int frames = 1);
     // Reset the unsent-credit accumulator (on channel open/close).
     void ResetAudioCredit();
 
@@ -105,7 +114,10 @@ protected:
     std::function<void()> on_connected_;
     std::function<void()> on_disconnected_;
 
-    int server_sample_rate_ = 24000;
+    // Fallback if the server hello omits audio.out (it shouldn't — §3.2 dictates
+    // it). 16000 matches the device's fixed playback rate; a 24k default here
+    // would make a hello-omission silently configure the decoder off-rate.
+    int server_sample_rate_ = 16000;
     int server_frame_duration_ = 60;
     bool error_occurred_ = false;
     std::string session_id_;  // v1/MQTT only; unused on the v2 websocket wire

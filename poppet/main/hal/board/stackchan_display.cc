@@ -426,6 +426,21 @@ void StackChanAvatarDisplay::SetEmotion(const char* emotion)
         }
     }
 
+    // Any non-sleepy emotion ends display-sleep. "sleepy" is an ordinary
+    // emotion the server/LLM can emit (display frame), and its branch below
+    // disables FaceDetector and removes the face-tracking/idle-motion
+    // modifiers — without this reset the flag latched forever (nothing else
+    // clears it), leaving walk-up detection and idle motion dead until
+    // reboot. Re-enabling here is symmetric with the sleepy branch; the
+    // modifiers themselves lazy-recreate on the next SetStatus (see the
+    // !is_sleeping_ gates there).
+    if (is_sleeping_ && strcmp(emotion, "sleepy") != 0) {
+        is_sleeping_ = false;
+        avatar.clearSpeech();  // drop the "Zzz…" bubble
+        FaceDetector::getInstance().setEnabled(true);
+        ESP_LOGI(TAG, "display sleep cleared by emotion '%s'", emotion);
+    }
+
     // Map emotion string to stackchan::Emotion
     if (strcmp(emotion, "neutral") == 0) {
         avatar.setEmotion(Emotion::Neutral);
@@ -619,9 +634,11 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
         return;
     }
 
-    auto& avatar = stackchan.avatar();
-
     DisplayLockGuard lock(this);
+    // Take the avatar ref only AFTER the lock (like SetEmotion does):
+    // applyFamiliar swaps/destroys the avatar under this same lock, so a ref
+    // captured before it could dangle for the rest of this call.
+    auto& avatar = stackchan.avatar();
 
     // Face detection is decoupled from chat state — runs whenever
     // Dotty isn't sleeping. The previous gating (enable in STANDBY,
