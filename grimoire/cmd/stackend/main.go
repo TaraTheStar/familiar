@@ -47,6 +47,7 @@ func main() {
 		whisperModel   = flag.String("whisper-model", "", "Path to ggml whisper model (.bin); empty disables ASR (use -hardcoded-reply instead)")
 		whisperThreads = flag.Int("whisper-threads", 0, "Whisper inference thread count (0=NumCPU)")
 		asrStreaming   = flag.Bool("asr-streaming", false, "Emit incremental transcript{final:false} partials while the user speaks (re-runs whisper on the growing buffer; off=single final transcript per turn)")
+		wakeGate       = flag.Bool("wake-gate", false, "Drop the first turn after a wake (and close the session) when its transcript is a bare known near-phrase of the wake word — backstop for on-device false accepts")
 		llmURL         = flag.String("llm-url", "", "OpenAI-compatible LLM endpoint (e.g. http://192.0.2.20:8080); empty disables LLM")
 		llmModel       = flag.String("llm-model", "", "LLM model name as registered with llama-swap (e.g. gemma4-26B-A4B)")
 		llmAPIKey      = flag.String("llm-api-key", "", "Bearer token for the LLM endpoint")
@@ -97,7 +98,7 @@ func main() {
 	)
 	flag.Parse()
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: parseLevel(*logLevel),
 	}))
 	slog.SetDefault(logger)
@@ -206,6 +207,7 @@ func main() {
 		Kokoro:           kokoro,
 		ASR:              whisper,
 		ASRStreaming:     *asrStreaming,
+		WakeGate:         *wakeGate,
 		LLM:              llmClient,
 		ServerTools:      serverTools,
 		SystemPrompt:     sysPrompt,

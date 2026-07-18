@@ -41,6 +41,17 @@ static struct whisper_full_params stackend_default_params(int n_threads) {
     p.n_threads      = n_threads;
     return p;
 }
+
+// Route whisper.cpp/ggml logging into Go (see log.go) instead of raw
+// stderr, which would corrupt the structured (JSON-per-line) log stream.
+extern void stackendWhisperLogBridge(int level, char *text);
+static void stackend_log_cb(enum ggml_log_level level, const char *text, void *user_data) {
+    (void)user_data;
+    stackendWhisperLogBridge((int)level, (char *)text);
+}
+static void stackend_install_log_callback(void) {
+    whisper_log_set(stackend_log_cb, NULL);
+}
 */
 import "C"
 
@@ -77,12 +88,17 @@ type Config struct {
 // Version returns the linked whisper.cpp version string.
 func Version() string { return C.GoString(C.whisper_version()) }
 
+// logCallbackOnce installs the whisper->slog log bridge exactly once,
+// before the first model load (init is the chattiest phase).
+var logCallbackOnce sync.Once
+
 // New loads a model from disk. Returns an error if the model file is
 // missing, malformed, or whisper internals can't initialize.
 func New(cfg Config) (*Whisper, error) {
 	if cfg.ModelPath == "" {
 		return nil, errors.New("asr: ModelPath is empty")
 	}
+	logCallbackOnce.Do(func() { C.stackend_install_log_callback() })
 	cPath := C.CString(cfg.ModelPath)
 	defer C.free(unsafe.Pointer(cPath))
 

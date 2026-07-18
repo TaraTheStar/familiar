@@ -88,6 +88,16 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	}
 	s.log.Info("turn: transcript", "text", transcript)
 
+	// Adversarial wake gate (wakegate.go): the first turn after a wake-word
+	// pre-roll carries the spoken wake phrase; if it reads as a bare known
+	// near-phrase ("hey lunch"), the wake was false — drop the turn and close
+	// so the device returns to idle as if it never fired.
+	if s.wakeGateArmed.Swap(false) && wakeGateRejects(transcript) {
+		s.log.Info("turn: wake gate rejected false wake", "text", transcript)
+		_ = s.out.Close(ctx, "wake_gate")
+		return
+	}
+
 	if err := s.out.Transcript(ctx, transcript, true); err != nil {
 		s.log.Warn("turn: send transcript failed", "err", err)
 	}
@@ -130,7 +140,7 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	// normally, exits the talking animation, and only then enters sleep, so
 	// the sleepy avatar set by the firmware isn't clobbered.
 	for _, tc := range deferred {
-		s.log.Info("turn: dispatching deferred tool", "name", tc.Function.Name, "args", tc.Function.Arguments)
+		s.log.Info("turn: dispatching deferred tool", "name", tc.Function.Name, jsonAttr("args", tc.Function.Arguments))
 		if _, derr := s.dispatchToolCall(ctx, tc); derr != nil {
 			s.log.Warn("turn: deferred tool failed", "name", tc.Function.Name, "err", derr)
 		}
@@ -205,7 +215,7 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 			// device sleeps. Feed the LLM a synthetic success so it still
 			// generates the farewell this turn.
 			if isSleepCommand(tc) {
-				s.log.Info("turn: deferring sleep until speech completes", "args", tc.Function.Arguments)
+				s.log.Info("turn: deferring sleep until speech completes", jsonAttr("args", tc.Function.Arguments))
 				deferred = append(deferred, tc)
 				s.dialogueMu.Lock()
 				s.dialogue = append(s.dialogue, llm.Message{
@@ -355,7 +365,7 @@ func (s *Session) dispatchToolCall(ctx context.Context, tc llm.ToolCall) (string
 	// Server-side tools (e.g. get_current_time) are handled locally, not
 	// forwarded to the device.
 	if h, ok := s.localHandlers[tc.Function.Name]; ok {
-		s.log.Info("turn: local tool call", "name", tc.Function.Name, "args", tc.Function.Arguments)
+		s.log.Info("turn: local tool call", "name", tc.Function.Name, jsonAttr("args", tc.Function.Arguments))
 		result, err := h(ctx, json.RawMessage(tc.Function.Arguments))
 		if err != nil {
 			return fmt.Sprintf("Tool failed: %v", err), err
@@ -367,7 +377,7 @@ func (s *Session) dispatchToolCall(ctx context.Context, tc llm.ToolCall) (string
 	// Server-side tool providers (external MCP, etc.) are also dispatched
 	// in-process, not forwarded to the device.
 	if s.cfg.ServerTools != nil && s.cfg.ServerTools.Handles(tc.Function.Name) {
-		s.log.Info("turn: server tool call", "name", tc.Function.Name, "args", tc.Function.Arguments)
+		s.log.Info("turn: server tool call", "name", tc.Function.Name, jsonAttr("args", tc.Function.Arguments))
 		args := json.RawMessage(tc.Function.Arguments)
 		if len(args) == 0 {
 			args = json.RawMessage(`{}`)
@@ -386,7 +396,7 @@ func (s *Session) dispatchToolCall(ctx context.Context, tc llm.ToolCall) (string
 	if s.toolPort == nil {
 		return "Tool not available (no device tool registry).", fmt.Errorf("no tool port")
 	}
-	s.log.Info("turn: tool call", "name", tc.Function.Name, "args", tc.Function.Arguments)
+	s.log.Info("turn: tool call", "name", tc.Function.Name, jsonAttr("args", tc.Function.Arguments))
 
 	// LLM gives arguments as a JSON string; the port wants RawMessage.
 	args := json.RawMessage(tc.Function.Arguments)

@@ -94,6 +94,12 @@ type Config struct {
 	// skipped.
 	LLM *llm.Client
 
+	// WakeGate enables the server-side adversarial wake gate (wakegate.go):
+	// the first turn after a wake-word pre-roll is dropped — and the session
+	// closed — when its transcript is a bare known near-phrase of the wake
+	// word ("hey lunch"). Backstop for on-device false accepts.
+	WakeGate bool
+
 	// ServerTools, if non-nil, is a process-global provider of extra LLM-callable
 	// tools beyond the device's catalog — external MCP servers bridged in
 	// (internal/mcptools). Shared across all sessions; its tools are advertised to
@@ -304,6 +310,10 @@ type Session struct {
 	// audio window early so buffered pre-roll counts as turn audio. Set once in
 	// handshakeV2, read-only after.
 	wakeWordAudio bool
+	// wakeGateArmed marks the next turn as the first after a wake-word
+	// pre-roll, making it subject to the adversarial wake gate (wakegate.go).
+	// Set on the session loop goroutine, consumed on the turn goroutine.
+	wakeGateArmed atomic.Bool
 	// prerollOpen is true while a window opened by a wake pre-roll is awaiting
 	// its listen_start. In this state mic frames buffer but no endpoint detector
 	// runs (the mode isn't known until listen_start, and the pre-roll must not
@@ -790,6 +800,12 @@ func (s *Session) dispatchText(ctx context.Context, data []byte) {
 			s.ep = nil
 			s.lastPartialBytes = 0 // restart the streaming-ASR debounce
 			s.rearm.Store(0)
+			// Arm the adversarial wake gate for the first turn — but only for
+			// spoken wakes ("Hey …"); synthetic invokes (face wake, dashboard)
+			// carry no wake phrase in the pre-roll to check against.
+			if s.cfg.WakeGate && strings.HasPrefix(strings.ToLower(e.Phrase), "hey") {
+				s.wakeGateArmed.Store(true)
+			}
 		}
 	case evAbort:
 		// Barge-in: cancel the in-flight turn. The TTS sink emits audio_cancel
@@ -828,7 +844,7 @@ func (s *Session) dispatchText(ctx context.Context, data []byte) {
 // logged and ignored — forward-compatible, never a protocol error. Richer
 // wiring (feeding events into the LLM's ambient context) is future work.
 func (s *Session) handleTelemetry(ctx context.Context, e evTelemetry) {
-	s.log.Info("telemetry", "event", e.Name, "data", string(e.Data))
+	s.log.Info("telemetry", "event", e.Name, jsonAttr("data", string(e.Data)))
 	switch e.Name {
 	case "battery_low":
 		as, ok := s.out.(alertSink)
