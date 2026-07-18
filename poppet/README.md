@@ -26,6 +26,8 @@ idf.py -p /dev/ttyACM0 flash # adjust port
 Toolchain: [ESP-IDF v5.5.4](https://docs.espressif.com/projects/esp-idf/en/v5.5.4/esp32s3/index.html),
 target **esp32s3**.
 
-Contributors: read [AGENTS.md](AGENTS.md) for where the source lives (tracked
-first-party + vendored fork vs. fetched component libraries) and the repo
-conventions.
+Source layout: first-party app code is tracked under [`main/`](main/); the
+vendored firmware core lives at
+[`vendor/stackchan-esp32/`](vendor/stackchan-esp32/) (lineage in its
+[VENDOR.md](vendor/stackchan-esp32/VENDOR.md)); component libraries listed in
+[`repos.json`](repos.json) are fetched by `fetch_repos.py` and stay untracked.

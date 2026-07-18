@@ -35,7 +35,7 @@ dependencies:
 
   # microWakeWord runtime (custom "Hey Artemis" TFLite). Both Apache-2.0.
   # Gated on CONFIG_USE_MICROWAKEWORD so non-MWW builds don't pull the
-  # TFLite toolchain. See main/stackchan/wake_word/microwakeword_setup.md.
+  # TFLite toolchain. See docs/WAKE_WORD.md (repo root).
   espressif/esp-tflite-micro:
     version: "==1.3.7"
     rules:

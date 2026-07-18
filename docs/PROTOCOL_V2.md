@@ -2,7 +2,7 @@
 
 The normative spec for the wire protocol between a self-hosted StackChan server
 and its devices. Fixes the warts in v1 (the retired predecessor, documented in
-[PROTOCOL_V1.md](PROTOCOL_V1.md)) while preserving its sensible design choices.
+[PROTOCOL_V1.md](archive/PROTOCOL_V1.md)) while preserving its sensible design choices.
 
 **Status: LIVE — this is the only protocol the server and firmware speak.** §11 open
 questions are resolved (see §11), the server contract is locked, and Phase 5 (§10) is
@@ -836,7 +836,7 @@ implemented both protocols, selected by the `Protocol-Version` header at WS upgr
 `tools_v1.go`), and the legacy `/xiaozhi/` route mounts are all deleted. The upgrade handler
 rejects any `Protocol-Version` other than empty or `2`, and routes mount under `/grimoire/`
 only. `package protocol` keeps just `AudioParams` + the OTA HTTP response types;
-`docs/PROTOCOL_V1.md` is retained for history. The device is reflashed to dial `/grimoire/`
+`docs/archive/PROTOCOL_V1.md` is retained for history. The device is reflashed to dial `/grimoire/`
 before reconnecting, so no `/xiaozhi/` compatibility window is kept.
 
 Estimated firmware change to add v2: ~1 week of work (mostly in

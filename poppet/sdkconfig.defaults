@@ -17,7 +17,7 @@ CONFIG_BOARD_TYPE_M5STACK_STACK_CHAN=y
 CONFIG_OTA_URL=""
 # Wake word: microWakeWord "Hey Artemis" (custom TFLite streaming model, run
 # behind the AFE with WakeNet disabled). The model is flashed to the mww_model
-# partition — see main/stackchan/wake_word/microwakeword_setup.md.
+# partition — see docs/WAKE_WORD.md (repo root).
 # THRESHOLD = probability_cutoff * 100; SLIDING_WINDOW from the trainer manifest.
 CONFIG_USE_MICROWAKEWORD=y
 CONFIG_MICROWAKEWORD_THRESHOLD=70

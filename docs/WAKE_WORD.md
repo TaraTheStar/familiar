@@ -1,9 +1,11 @@
-# microWakeWord Setup — "Hey Artemis"
+# Wake word — microWakeWord "Hey Artemis"
 
-Implementation plan for replacing the prebuilt ESP-SR WakeNet9 wake word
-("Hi, ESP") with a custom-trained microWakeWord (TFLite-Micro) **"Hey Artemis"**
-model. Decided 2026-07-15: this gates the first public release — the themed
-wake word ships trained, not off-the-shelf.
+How the prebuilt ESP-SR WakeNet9 wake word ("Hi, ESP") was replaced with a
+custom-trained microWakeWord (TFLite-Micro) **"Hey Artemis"** model — the
+decision record, the training recipe, and the flash/tuning steps. **Shipped
+2026-07-18** (on-device: recall 6/6, adversarial phrases rejected, cutoff
+0.70 / sliding window 4). The model is speaker-adapted: to use your own phrase
+or voice, follow the same recipe with your own recordings.
 
 ## Why this path (decision record, 2026-07-15)
 

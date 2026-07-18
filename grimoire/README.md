@@ -22,7 +22,7 @@ device ──WS──> stackend ──HTTP──> llama-swap   (LLM)
 ```
 
 See [../docs/PROTOCOL_V2.md](../docs/PROTOCOL_V2.md) for the live wire protocol
-this implements ([../docs/PROTOCOL_V1.md](../docs/PROTOCOL_V1.md) is the retired
+this implements ([../docs/archive/PROTOCOL_V1.md](../docs/archive/PROTOCOL_V1.md) is the retired
 predecessor, kept for history).
 
 ## Layout

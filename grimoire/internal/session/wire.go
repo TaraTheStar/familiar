@@ -31,7 +31,7 @@ import (
 //
 // A reply is one SpeakBegin … SpeakEnd pair, regardless of sentence count —
 // the v1 device couples its Speaking state to that pair, so splitting it would
-// truncate later sentences (see docs/PROTOCOL_V1.md §5.2). The loop holds the
+// truncate later sentences (see docs/archive/PROTOCOL_V1.md §5.2). The loop holds the
 // pair open for the whole reply; the implementation owns the per-protocol
 // audio flow control (v1 pacing vs v2 credits) inside SpeakPCM/SpeakEnd.
 //

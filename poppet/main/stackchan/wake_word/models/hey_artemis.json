@@ -2,7 +2,7 @@
   "type": "micro",
   "wake_word": "Hey Artemis",
   "label": "Hey Artemis",
-  "author": "Tater Totterson",
+  "author": "TaraTheStar",
   "website": "https://github.com/TaterTotterson/microWakeWord-Trainer-Nvidia-Docker.git",
   "model": "hey_artemis.tflite",
   "trained_languages": [

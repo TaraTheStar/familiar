@@ -2,13 +2,13 @@
 
 **REMOVED FROM THE SERVER (2026-05-30).** This documents the v1 wire format the
 firmware originally spoke; it is retained for historical reference only. The live
-protocol is [PROTOCOL_V2.md](PROTOCOL_V2.md). The server no longer implements v1 at
+protocol is [PROTOCOL_V2.md](../PROTOCOL_V2.md). The server no longer implements v1 at
 all — the v1 wire types, the MCP-over-WS tool path, and the legacy `/xiaozhi/` route
 mounts were deleted in migration Phase 5 (PROTOCOL_V2 §10.2). A device must speak v2
 on `/grimoire/`.
 
-This was the wire contract between the StackChan device ([poppet](../poppet)) and
-the self-hosted backend ([grimoire](../grimoire)): every HTTP endpoint and
+This was the wire contract between the StackChan device ([poppet](../../poppet)) and
+the self-hosted backend ([grimoire](../../grimoire)): every HTTP endpoint and
 WebSocket message the firmware expected or emitted.
 
 Source of truth at the time (device side) was the patched xiaozhi-esp32 tree the
@@ -543,7 +543,7 @@ Operational gotchas still worth remembering:
 This document began as a reverse-engineering audit of the xiaozhi-esp32 firmware,
 written to decide whether to replace the ~15K-line Python xiaozhi-esp32-server
 with a focused self-hosted backend. The answer was yes; that backend is
-[grimoire](../grimoire) (Go + whisper.cpp), and it implements the contract above.
+[grimoire](../../grimoire) (Go + whisper.cpp), and it implements the contract above.
 Earlier revisions of this file carried a "minimum-viable replacement" checklist,
 a Python/aiohttp effort estimate, and a "should we rewrite?" recommendation —
 dropped now that the rewrite has shipped and is verified on hardware.

@@ -5,7 +5,8 @@ server you own. Everything runs on your LAN; nothing touches a cloud.
 
 Deeper docs when you need them: [poppet/BUILD.md](../poppet/BUILD.md) (firmware
 toolchain + network isolation), [grimoire/README.md](../grimoire/README.md)
-(server internals + flags), [PROTOCOL_V2.md](PROTOCOL_V2.md) (the wire contract).
+(server internals + flags), [PROTOCOL_V2.md](PROTOCOL_V2.md) (the wire contract),
+[WAKE_WORD.md](WAKE_WORD.md) (training a custom wake word for your own voice).
 
 ## What you need
 

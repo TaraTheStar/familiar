@@ -16,9 +16,12 @@ familiar/
 │               #    committed in-tree at poppet/vendor/stackchan-esp32/)
 ├─ grimoire/    # the backend — hears (whisper), thinks (LLM), speaks (Kokoro)
 │               #   Go server, deployed as a container
-└─ docs/        # the poppet↔grimoire contract
-   ├─ PROTOCOL_V1.md       # the retired v1 wire protocol (historical)
-   └─ PROTOCOL_V2.md       # the live v2 contract both halves implement
+└─ docs/        # the poppet↔grimoire contract + project docs
+   ├─ QUICKSTART.md        # clean clone → a talking familiar
+   ├─ PROTOCOL_V2.md       # the live v2 contract both halves implement
+   ├─ WAKE_WORD.md         # training + flashing the custom wake word
+   └─ archive/
+      └─ PROTOCOL_V1.md    # the retired v1 wire protocol (historical)
 ```
 
 - **[poppet/](poppet/)** — firmware. Build with ESP-IDF v5.5.4; run

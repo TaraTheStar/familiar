@@ -253,7 +253,7 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 // and collecting any tool calls. The whole text response is one Speaking
 // session — a single SpeakBegin … SpeakEnd pair regardless of sentence count —
 // so the device never drops to Listening mid-reply and clips later sentences
-// (a joke's punchline is the classic casualty; see docs/PROTOCOL_V1.md §5.2).
+// (a joke's punchline is the classic casualty; see docs/archive/PROTOCOL_V1.md §5.2).
 // SpeakBegin is lazy (first voiced sentence) so a tool-only turn emits no audio
 // frames, and SpeakEnd is deferred so the session is always closed — even on a
 // stream error — leaving the device out of Speaking.
