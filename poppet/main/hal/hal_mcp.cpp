@@ -156,11 +156,15 @@ void Hal::xiaozhi_mcp_init()
         });
 
     mclog::tagInfo(_tag, "add avatar.set_familiar tool");
+    std::string familiar_names;  // built from the registry so the list can't drift
+    for (const auto& n : stackchan::avatar::knownFamiliars()) {
+        familiar_names += (familiar_names.empty() ? "\"" : ", \"") + n + "\"";
+    }
     mcp_server.AddTool(
         "self.avatar.set_familiar",
-        "Change Dotty's on-screen character (the 'familiar'). Valid: \"default\" (the "
-        "built-in face) or \"cat\". The choice persists across reboots. Use when the user "
-        "asks to look like / become a specific familiar.",
+        "Change Dotty's on-screen character (the 'familiar'). Valid: " + familiar_names +
+            " (\"default\" is the built-in face). The choice persists across reboots. Use "
+            "when the user asks to look like / become a specific familiar.",
         PropertyList({Property("familiar", kPropertyTypeString, std::string("default"))}),
         [this](const PropertyList& properties) -> ReturnValue {
             std::string name = properties["familiar"].value<std::string>();

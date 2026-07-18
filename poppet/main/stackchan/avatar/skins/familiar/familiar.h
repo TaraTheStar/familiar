@@ -12,7 +12,8 @@
  *
  * Asset names: "<name>_face.png", "<name>_eye_open.png", "<name>_eye_closed.png",
  * "<name>_mouth_closed.png", "<name>_mouth_open.png" — loaded from the assets
- * partition (see main/assets/familiars/gen_familiars.py for the placeholder cat).
+ * partition (see main/assets/familiars/gen_familiars.py, which draws the shipped
+ * set: cat, bat, toad, fox).
  */
 #pragma once
 #include "../../avatar/avatar.h"

@@ -20,7 +20,7 @@ static const char* kNvsKey       = "familiar";
 
 std::vector<std::string> knownFamiliars()
 {
-    return {"default", "cat"};
+    return {"default", "cat", "bat", "toad", "fox"};
 }
 
 bool isValidFamiliar(const std::string& name)
@@ -37,7 +37,7 @@ bool isValidFamiliar(const std::string& name)
 // procedural "default" face.
 static bool isSpriteFamiliar(const std::string& name)
 {
-    return name == "cat";
+    return name != "default" && isValidFamiliar(name);
 }
 
 std::string currentFamiliar()
