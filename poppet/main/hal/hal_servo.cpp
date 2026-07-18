@@ -83,8 +83,17 @@ public:
     int getCurrentAngle() override
     {
         int current_pos = _scs_bus.ReadPos(_config.id);
-        int angle       = (current_pos - _zero_pos) * 5 * 10 / 16;
-        angle           = uitk::clamp(angle, getAngleLimit().x, getAngleLimit().y);
+        if (current_pos < 0) {
+            // Failed bus read. Do NOT run the mapping on -1: it computes to well
+            // below the min limit and clamps to angleLimit.x, i.e. it commands the
+            // head hard into its mechanical stop. Stalled there the SCS servo trips
+            // its onboard overload protection and latches — after which every read
+            // returns -1 and the head is stuck until a full servo power-cycle. Fall
+            // back to the last commanded angle so motion continues from a sane origin.
+            return _angle_anim.directValue();
+        }
+        int angle = (current_pos - _zero_pos) * 5 * 10 / 16;
+        angle     = uitk::clamp(angle, getAngleLimit().x, getAngleLimit().y);
         // mclog::tagInfo(_tag, "id: {} current pos: {} angle: {}", _id, current_pos, angle);
         return angle;
     }
