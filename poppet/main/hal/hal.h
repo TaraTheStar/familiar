@@ -115,7 +115,7 @@ public:
         _label_version->setTextFont(&lv_font_montserrat_14);
         _label_version->setTextColor(lv_color_hex(0x8B8B8B));
         _label_version->align(LV_ALIGN_BOTTOM_RIGHT, -7, -6);
-        _label_version->setText("V" FIRMWARE_VERSION);
+        _label_version->setText("stackchan - familiar (poppet) " FIRMWARE_VERSION);
     }
 
 private:

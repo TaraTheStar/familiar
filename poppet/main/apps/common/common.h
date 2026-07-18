@@ -13,6 +13,8 @@
 
 namespace common {
 
-inline constexpr std::string_view FirmwareVersion = "V" FIRMWARE_VERSION;
+// Product + version string shown on the firmware/about screen and boot screen.
+// FIRMWARE_VERSION is the git tag, injected from CMake (see CMakeLists.txt).
+inline constexpr std::string_view FirmwareVersion = "stackchan - familiar (poppet) " FIRMWARE_VERSION;
 
 }

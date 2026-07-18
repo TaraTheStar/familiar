@@ -95,7 +95,7 @@ void AppSetup::onOpen()
         {
             "Firmware",
             {
-                {fmt::format("Version:  {}", common::FirmwareVersion),
+                {fmt::format("{}", common::FirmwareVersion),
                  [&]() {
                      _magic_count++;
                      if (_magic_count >= 10) {
