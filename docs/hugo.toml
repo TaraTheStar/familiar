@@ -31,8 +31,8 @@ timeZone = "UTC"
   files = ["/*.md", "/**/*.md", "!/layouts/**", "!/public/**", "!/resources/**"]
 
 [[module.mounts]]
-  source = "assets/familiars"
-  target = "static/assets/familiars"
+  source = "assets"
+  target = "static/assets"
 
 [[module.mounts]]
   source = "layouts"

@@ -5,12 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ if .IsHome }}{{ site.Title }}{{ else }}{{ .Title }} · {{ site.Title }}{{ end }}</title>
 <meta name="description" content="A self-hosted, local-network voice companion for the StackChan ESP32-S3 robot.">
+<link rel="icon" href="{{ "assets/logo.svg" | relURL }}" type="image/svg+xml">
+<link rel="icon" href="{{ "assets/favicon-32.png" | relURL }}" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="{{ "assets/apple-touch-icon.png" | relURL }}">
 {{ partial "style.html" . }}
 </head>
 <body>
 <div class="wrap">
   <nav class="sidebar">
-    <a class="brand" href="{{ site.Home.RelPermalink }}">familiar</a>
+    <a class="brand" href="{{ site.Home.RelPermalink }}"><img class="brand-logo" src="{{ "assets/logo.svg" | relURL }}" alt="" width="38" height="38">familiar</a>
     <ul>
       <li{{ if .IsHome }} class="active"{{ end }}><a href="{{ site.Home.RelPermalink }}">Home</a></li>
       {{ range where site.RegularPages "Weight" "gt" 0 }}

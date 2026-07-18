@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- familiar: something small is hiding inside the witch's hat,
+       peering out from under the lifted front edge of the brim -->
+  <defs>
+    <radialGradient id="eyeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e9c46a" stop-opacity="0.5"/>
+      <stop offset="70%" stop-color="#e9c46a" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#e9c46a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- ground shadow -->
+  <ellipse cx="128" cy="211" rx="95" ry="6" fill="#150e1f" opacity="0.25"/>
+
+  <!-- the dark opening under the lifted brim edge -->
+  <path fill="#150e1f" d="M 62 209
+    C 84 186 104 176 128 176
+    C 152 176 172 186 194 209
+    C 194 211 170 212 128 212
+    C 86 212 62 211 62 209 Z"/>
+
+  <!-- the faintest suggestion of a creature in there -->
+  <path fill="#1f1730" opacity="0.8" d="M 92 210
+    C 92 194 106 184 128 184
+    C 150 184 164 194 164 210
+    C 164 211 150 211.5 128 211.5
+    C 106 211.5 92 211 92 210 Z"/>
+
+  <!-- eye glow halos -->
+  <circle cx="107" cy="196" r="26" fill="url(#eyeGlow)"/>
+  <circle cx="149" cy="196" r="26" fill="url(#eyeGlow)"/>
+
+  <!-- very big eyes, peering out -->
+  <circle cx="107" cy="196" r="14" fill="#e9c46a"/>
+  <circle cx="149" cy="196" r="14" fill="#e9c46a"/>
+  <circle cx="107" cy="196" r="8.2" fill="#1a1226"/>
+  <circle cx="149" cy="196" r="8.2" fill="#1a1226"/>
+  <circle cx="110.5" cy="192.5" r="3.6" fill="#f7f2e7"/>
+  <circle cx="152.5" cy="192.5" r="3.6" fill="#f7f2e7"/>
+  <circle cx="103.5" cy="200" r="1.6" fill="#f7f2e7" opacity="0.7"/>
+  <circle cx="145.5" cy="200" r="1.6" fill="#f7f2e7" opacity="0.7"/>
+
+  <!-- brim resting on the ground, front edge lifted into an arch -->
+  <path fill="#4b2e66" d="M 26 188
+    C 44 162 84 150 128 150
+    C 172 150 212 162 230 188
+    C 224 200 208 207 194 209
+    C 172 186 152 176 128 176
+    C 104 176 84 186 62 209
+    C 48 207 32 200 26 188 Z"/>
+  <!-- shadowed underside along the lifted edge -->
+  <path fill="#341f4d" d="M 62 209
+    C 84 186 104 176 128 176
+    C 152 176 172 186 194 209
+    C 172 180 152 169 128 169
+    C 104 169 84 180 62 209 Z"/>
+
+  <!-- cone, in front of the brim: one smooth silhouette, tip drooping right -->
+  <path fill="#4b2e66" d="M 80 160
+    C 88 108 108 66 146 44
+    C 168 32 190 36 200 54
+    C 188 50 176 56 166 66
+    C 176 92 182 126 186 160
+    C 170 167 150 169 132 169
+    C 114 169 94 166 80 160 Z"/>
+
+  <!-- hat band + buckle -->
+  <path fill="#2e2440" d="M 90 134
+    C 101 141 116 145 134 145
+    C 152 145 167 142 179 136
+    C 180 142 182 150 183 157
+    C 169 164 152 167 134 167
+    C 114 167 98 164 86 158
+    C 87 151 88 141 90 134 Z"/>
+  <rect x="124" y="131" width="18" height="16" rx="3" fill="#c9a55c" transform="rotate(2 133 139)"/>
+  <rect x="128.5" y="135" width="9" height="8" rx="1.5" fill="#2e2440" transform="rotate(2 133 139)"/>
+
+  <!-- sparkles -->
+  <path fill="#c3a3e6" d="M 214 96 L 217 105 L 226 108 L 217 111 L 214 120 L 211 111 L 202 108 L 211 105 Z"/>
+  <path fill="#c9a55c" d="M 42 112 L 44.5 118.5 L 51 121 L 44.5 123.5 L 42 130 L 39.5 123.5 L 33 121 L 39.5 118.5 Z"/>
+  <path fill="#c3a3e6" opacity="0.8" d="M 64 52 L 66 57 L 71 59 L 66 61 L 64 66 L 62 61 L 57 59 L 62 57 Z"/>
+</svg>
