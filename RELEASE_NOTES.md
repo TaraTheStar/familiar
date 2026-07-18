@@ -1,15 +1,14 @@
 # Release notes — v2.0.0
 
-> **Status: pending tag.** Two tags mark this repo's history:
+> **Tagged 2026-07-18.** Two tags mark this repo's history:
 >
-> - **`v1.0.0`** (tagged) — the initial snapshot, at parity with the previous
+> - **`v1.0.0`** — the initial snapshot, at parity with the previous
 >   standalone projects: it speaks the v1 wire protocol and remains
 >   backward-compatible with the upstream xiaozhi-esp32 v2.2.4 firmware base.
 >   Check it out if you need the old wire.
-> - **`v2.0.0`** — this release; it will be tagged at the tip once the user
->   docs land. It is the first release on the Protocol v2 wire and supersedes
->   v1 entirely (v1 is removed server-side; upgrading requires a reflash, see
->   below).
+> - **`v2.0.0`** — this release: the first on the Protocol v2 wire, superseding
+>   v1 entirely (v1 is removed server-side; upgrading a v1 device requires a
+>   reflash, see below).
 
 The `familiar` voice companion moves to **Protocol v2** end-to-end: a leaner,
 first-class wire protocol between the StackChan firmware (`poppet`) and the
