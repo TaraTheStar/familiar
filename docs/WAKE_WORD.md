@@ -1,3 +1,8 @@
+---
+title: Wake word
+weight: 6
+---
+
 # Wake word — microWakeWord "Hey Artemis"
 
 How the prebuilt ESP-SR WakeNet9 wake word ("Hi, ESP") was replaced with a

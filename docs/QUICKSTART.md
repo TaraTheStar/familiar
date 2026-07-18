@@ -1,10 +1,15 @@
+---
+title: Quickstart
+weight: 2
+---
+
 # Quickstart — from clean clone to a talking familiar
 
 The shortest path to a StackChan on your desk holding a conversation with a
 server you own. Everything runs on your LAN; nothing touches a cloud.
 
-Deeper docs when you need them: [poppet/BUILD.md](../poppet/BUILD.md) (firmware
-toolchain + network isolation), [grimoire/README.md](../grimoire/README.md)
+Deeper docs when you need them: [poppet/BUILD.md](https://github.com/TaraTheStar/familiar/blob/main/poppet/BUILD.md) (firmware
+toolchain + network isolation), [grimoire/README.md](https://github.com/TaraTheStar/familiar/blob/main/grimoire/README.md)
 (server internals + flags), [PROTOCOL_V2.md](PROTOCOL_V2.md) (the wire contract),
 [WAKE_WORD.md](WAKE_WORD.md) (training a custom wake word for your own voice).
 
@@ -92,7 +97,7 @@ is on the device side, not the server.
 
 ## 3. Firmware (poppet)
 
-Full toolchain details live in [poppet/BUILD.md](../poppet/BUILD.md); the
+Full toolchain details live in [poppet/BUILD.md](https://github.com/TaraTheStar/familiar/blob/main/poppet/BUILD.md); the
 short version:
 
 ```bash
@@ -135,13 +140,18 @@ starting at the same moment.
 
 ## 5. Say hello
 
-- **"Hi, ESP"** (the default wake word) — the face perks up to listening.
-  Don't like the phrase? esp-sr ships ~30 selectable English alternatives
-  ("Hi, Fairy", "Hey, Willow", "Astrolabe", "Jarvis", …) — pick one in
-  `menuconfig` under **ESP Speech Recognition → wakenet model** and reflash;
-  no code changes. The human-recorded models (Hi ESP, Alexa) detect a notch
-  better than the synthetic-trained ones (`_tts` suffix) — test your pick
-  from across the room before settling.
+- **"Hey Artemis"** (the shipped wake word) — the face perks up to listening.
+  Caveat: the bundled microWakeWord model is trained on its author's voice and
+  needs its model flashed to the `mww_model` partition
+  ([WAKE_WORD.md](WAKE_WORD.md) covers both flashing it and retraining for
+  your own voice/phrase). To skip all that, disable
+  `CONFIG_USE_MICROWAKEWORD` in `menuconfig` and use a stock WakeNet phrase
+  instead — esp-sr ships ~30 selectable English options ("Hi, ESP",
+  "Hi, Fairy", "Hey, Willow", "Astrolabe", "Jarvis", …) under
+  **ESP Speech Recognition → wakenet model**; no code changes. The
+  human-recorded models (Hi ESP, Alexa) detect a notch better than the
+  synthetic-trained ones (`_tts` suffix) — test your pick from across the
+  room before settling.
 - Ask something. Your words appear on the display as you speak, then the
   reply streams back with captions while the familiar talks.
 - **"What time is it?"** — exercises a server-side tool.
@@ -156,8 +166,12 @@ starting at the same moment.
 
 ## 6. Where to go next
 
+- **Day-to-day usage** — everything it can do once it's talking:
+  [using.md](using.md).
+- **How each half works** — deep dives on the firmware ([poppet.md](poppet.md))
+  and the server ([grimoire.md](grimoire.md)).
 - **Network isolation** — the actual privacy guarantee is a firewall rule,
-  not the firmware: [poppet/BUILD.md §5](../poppet/BUILD.md).
+  not the firmware: [poppet/BUILD.md §5](https://github.com/TaraTheStar/familiar/blob/main/poppet/BUILD.md).
 - **Give the LLM tools** — point `-mcp-config` at external MCP servers:
-  [grimoire/README.md](../grimoire/README.md).
+  [grimoire/README.md](https://github.com/TaraTheStar/familiar/blob/main/grimoire/README.md).
 - **How the wire works** — [PROTOCOL_V2.md](PROTOCOL_V2.md).

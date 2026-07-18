@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ if .IsHome }}{{ site.Title }}{{ else }}{{ .Title }} · {{ site.Title }}{{ end }}</title>
+<meta name="description" content="A self-hosted, local-network voice companion for the StackChan ESP32-S3 robot.">
+{{ partial "style.html" . }}
+</head>
+<body>
+<div class="wrap">
+  <nav class="sidebar">
+    <a class="brand" href="{{ site.Home.RelPermalink }}">familiar</a>
+    <ul>
+      <li{{ if .IsHome }} class="active"{{ end }}><a href="{{ site.Home.RelPermalink }}">Home</a></li>
+      {{ range where site.RegularPages "Weight" "gt" 0 }}
+      <li{{ if eq . $ }} class="active"{{ end }}><a href="{{ .RelPermalink }}">{{ .Title }}</a></li>
+      {{ end }}
+    </ul>
+    <div class="side-foot">
+      <a href="https://github.com/TaraTheStar/familiar">source&nbsp;↗</a>
+    </div>
+  </nav>
+  <main class="content">
+    {{ block "main" . }}{{ end }}
+  </main>
+</div>
+</body>
+</html>

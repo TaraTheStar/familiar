@@ -1,0 +1,99 @@
+<style>
+/* familiar docs: a witchy sibling of ensō's Kaimurasaki ink-on-paper look.
+   Dark (candlelit study) is the default; parchment light kicks in only when
+   the system explicitly prefers light — no-preference lands on dark, which
+   suits the nocturnal brand. */
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;1,500&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg: #150e1f; --bg-side: #1a1226; --fg: #e8e2f0; --fg-dim: #9b90ac;
+  --accent: #c3a3e6; --gold: #c9a55c; --line: #2e2440;
+  --code-bg: #1f1730; --link: #c3a3e6;
+  /* faint scatter of stars over the night sky */
+  --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='280' height='280'><g fill='%23cbb4ea'><circle cx='24' cy='41' r='1' opacity='.22'/><circle cx='131' cy='19' r='.8' opacity='.16'/><circle cx='217' cy='70' r='1.1' opacity='.2'/><circle cx='75' cy='112' r='.7' opacity='.14'/><circle cx='183' cy='151' r='1' opacity='.18'/><circle cx='39' cy='203' r='.9' opacity='.16'/><circle cx='249' cy='222' r='.8' opacity='.2'/><circle cx='121' cy='258' r='1' opacity='.14'/></g></svg>");
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f2e7; --bg-side: #efe8dd; --fg: #241c2a; --fg-dim: #77687a;
+    --accent: #4b2e66; --gold: #6f5520; --line: #ddd2c6;
+    --code-bg: #f0e9e0; --link: #4b2e66;
+    /* faint noise tile, tinted toward Kaimurasaki — old-paper grain */
+    --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='g'><feTurbulence baseFrequency='0.85' numOctaves='1' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.12 0 0 0 0 0.08 0 0 0 0 0.12 0 0 0 0.05 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg) var(--grain); color: var(--fg);
+  font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { display: flex; min-height: 100vh; }
+.sidebar {
+  flex: 0 0 225px; background: var(--bg-side); border-right: 1px solid var(--line);
+  padding: 1.5rem 1rem; position: sticky; top: 0; align-self: flex-start;
+  height: 100vh; overflow-y: auto;
+}
+.brand {
+  display: block; font-family: 'Lora', Georgia, serif; font-weight: 600;
+  font-size: 1.3rem; color: var(--accent); text-decoration: none;
+  margin-bottom: .4rem;
+}
+.brand::after {
+  content: "✶ ☾ ✶"; display: block; color: var(--fg-dim);
+  font-size: .7rem; letter-spacing: .7em; margin: .5rem 0 .9rem .35em;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li a {
+  display: block; padding: .35rem .6rem; border-radius: 6px;
+  color: var(--fg-dim); text-decoration: none; font-size: .95rem;
+}
+.sidebar li a:hover { color: var(--fg); background: var(--line); }
+.sidebar li.active a { color: var(--accent); font-weight: 600; }
+.sidebar li.active a::before { content: "✦ "; color: var(--gold); }
+.side-foot { margin-top: 1.5rem; font-size: .85rem; }
+.side-foot a { color: var(--fg-dim); text-decoration: none; }
+.content {
+  flex: 1; min-width: 0; max-width: 54rem; padding: 2.5rem 3rem 5rem;
+}
+h1, h2, h3, h4 {
+  font-family: 'Lora', Georgia, "Times New Roman", serif; font-weight: 600;
+  letter-spacing: -0.005em; color: var(--accent);
+  line-height: 1.25; scroll-margin-top: 1rem;
+}
+h1 { font-size: 2.1rem; margin-top: 0; letter-spacing: -0.015em; }
+h2 { font-size: 1.5rem; margin-top: 2.2em; border-bottom: 1px solid var(--line); padding-bottom: .25em; }
+h3 { font-size: 1.18rem; margin-top: 1.8em; }
+a { color: var(--link); }
+hr { border: 0; text-align: center; margin: 2.2rem 0; }
+hr::after { content: "☾ ✶ ☽"; color: var(--fg-dim); font-size: .85rem; letter-spacing: .8em; padding-left: .8em; }
+code {
+  background: var(--code-bg); padding: .12em .35em; border-radius: 4px;
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-size: .875em;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: .9rem 1.1rem; overflow-x: auto; line-height: 1.5;
+}
+pre code { background: none; padding: 0; font-size: .85rem; }
+blockquote {
+  margin: 1rem 0; padding: .1rem 1rem; border-left: 3px solid var(--gold);
+  background: var(--bg-side); border-radius: 0 6px 6px 0; color: var(--fg-dim);
+}
+table { border-collapse: collapse; margin: 1rem 0; display: block; overflow-x: auto; max-width: 100%; }
+th, td { border: 1px solid var(--line); padding: .45rem .7rem; text-align: left; }
+th { background: var(--bg-side); font-family: 'Lora', Georgia, serif; font-weight: 600; }
+img { max-width: 100%; height: auto; border-radius: 6px; }
+.toc {
+  background: var(--bg-side); border: 1px solid var(--line); border-radius: 8px;
+  padding: .6rem 1rem; margin-bottom: 1.5rem; font-size: .92rem;
+}
+.toc summary { cursor: pointer; color: var(--fg-dim); font-weight: 600; }
+.toc summary::marker { content: "☾ "; }
+.toc ul { margin: .3rem 0; padding-left: 1.2rem; }
+.toc a { text-decoration: none; }
+@media (max-width: 760px) {
+  .wrap { flex-direction: column; }
+  .sidebar { position: static; height: auto; flex-basis: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .content { padding: 1.5rem 1.2rem 4rem; }
+}
+</style>

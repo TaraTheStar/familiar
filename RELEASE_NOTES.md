@@ -1,8 +1,15 @@
-# Release notes — Protocol v2 (DRAFT)
+# Release notes — v2.0.0
 
-> **Status: draft.** Set the final version/tag and date before publishing.
-> Suggested tag: `v2.0.0`. This is the first release on the Protocol v2 wire; it
-> supersedes the v1 protocol entirely (v1 is removed server-side).
+> **Status: pending tag.** Two tags mark this repo's history:
+>
+> - **`v1.0.0`** (tagged) — the initial snapshot, at parity with the previous
+>   standalone projects: it speaks the v1 wire protocol and remains
+>   backward-compatible with the upstream xiaozhi-esp32 v2.2.4 firmware base.
+>   Check it out if you need the old wire.
+> - **`v2.0.0`** — this release; it will be tagged at the tip once the user
+>   docs land. It is the first release on the Protocol v2 wire and supersedes
+>   v1 entirely (v1 is removed server-side; upgrading requires a reflash, see
+>   below).
 
 The `familiar` voice companion moves to **Protocol v2** end-to-end: a leaner,
 first-class wire protocol between the StackChan firmware (`poppet`) and the
@@ -32,6 +39,9 @@ server (`grimoire`), proven on real hardware, plus three new features.
 - **Custom wake word — "Hey Artemis"** — a microWakeWord TFLite streaming model
   replaces the stock WakeNet phrase, trained on personal voice clips + balanced
   hard-negatives. Training/tuning recipe: `docs/WAKE_WORD.md`.
+- **User docs** — `docs/` is now a full user guide (and a Hugo-built GitHub
+  Pages site): quickstart, day-to-day usage, deep dives on both halves, and
+  familiar screenshots rendered from the shipped sprite assets.
 
 ## New in this release
 
@@ -113,7 +123,7 @@ custom wake word (recall 6/6, adversarial phrases rejected).
 
 ## Full commit log
 
-`git log main..` on `protocol-v2-server` — the reference conformance client,
-the v2 server, v1 removal, firmware v2 port + hardware bring-up fixes, firmware
-vendoring + de-brand, the three new features, the pre-release review fixes, and the
-"Hey Artemis" wake word.
+`git log v1.0.0..v2.0.0` — the reference conformance client, the v2 server,
+v1 removal, firmware v2 port + hardware bring-up fixes, firmware vendoring +
+de-brand, the three new features, the pre-release review fixes, the
+"Hey Artemis" wake word, and the user docs.

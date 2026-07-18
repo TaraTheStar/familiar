@@ -1,0 +1,39 @@
+# Hugo site config for the familiar user guide.
+# Local preview:  hugo server --source docs      (from the repo root)
+# Build:          hugo --source docs             (output in docs/public/)
+# Deployed by .github/workflows/pages.yml (Settings → Pages → Source: GitHub Actions).
+
+baseURL = "https://tarathestar.github.io/familiar/"
+title = "familiar"
+disableKinds = ["taxonomy", "term", "rss", "sitemap"]
+uglyURLs = true          # flat *.html pages so relative asset paths keep working
+enableGitInfo = false
+timeZone = "UTC"
+
+[markup.goldmark.renderer]
+  unsafe = true          # docs embed small HTML tables/imgs
+
+# Resolve [text](OTHER_PAGE.md) links to the built page URLs (the same links
+# GitHub's file viewer resolves natively).
+[markup.goldmark.renderHooks.link]
+  useEmbedded = "fallback"
+
+[markup.tableOfContents]
+  startLevel = 2
+  endLevel = 3
+
+# The *.md files live directly in docs/ so they stay readable on GitHub;
+# mount them into Hugo's content tree instead of moving them. _index.md is
+# the home page (Hugo's convention).
+[[module.mounts]]
+  source = "."
+  target = "content"
+  files = ["/*.md", "/**/*.md", "!/layouts/**", "!/public/**", "!/resources/**"]
+
+[[module.mounts]]
+  source = "assets/familiars"
+  target = "static/assets/familiars"
+
+[[module.mounts]]
+  source = "layouts"
+  target = "layouts"

@@ -1,3 +1,8 @@
+---
+title: Protocol v2
+weight: 7
+---
+
 # StackChan Protocol v2
 
 The normative spec for the wire protocol between a self-hosted StackChan server

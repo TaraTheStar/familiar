@@ -1,3 +1,7 @@
+---
+title: Protocol v1 (retired)
+---
+
 # StackChan Protocol v1 (Retired — historical reference)
 
 **REMOVED FROM THE SERVER (2026-05-30).** This documents the v1 wire format the

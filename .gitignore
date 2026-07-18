@@ -4,3 +4,8 @@
 *.swp
 .idea/
 .vscode/
+
+# Hugo (docs/ GitHub Pages site — local preview artifacts)
+docs/public/
+docs/resources/
+docs/.hugo_build.lock
