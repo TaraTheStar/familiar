@@ -34,6 +34,11 @@
 #else
 #include "wake_words/esp_wake_word.h"
 #endif
+#if CONFIG_USE_MICROWAKEWORD
+// poppet: original microWakeWord runtime (main/stackchan/wake_word/), resolved
+// via the main component's include dir.
+#include "stackchan/wake_word/microwakeword.h"
+#endif
 
 #define TAG "AudioService"
 
@@ -120,6 +125,16 @@ void AudioService::Initialize(AudioCodec* codec) {
         .skip_unhandled_events = true,
     };
     esp_timer_create(&audio_power_timer_args, &audio_power_timer_);
+
+#if CONFIG_USE_MICROWAKEWORD
+    // poppet: microWakeWord loads its model from the mww_model partition and
+    // needs no srmodels.bin, but SetModelsList() — where the wake word is
+    // normally constructed — only runs when the assets index carries an
+    // srmodels entry. Construct it here so wake word works without one.
+    if (wake_word_ == nullptr) {
+        SetModelsList(nullptr);
+    }
+#endif
 }
 
 void AudioService::Start() {
@@ -749,7 +764,12 @@ void AudioService::CheckAndUpdateAudioPowerState() {
 void AudioService::SetModelsList(srmodel_list_t* models_list) {
     models_list_ = models_list;
 
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_USE_MICROWAKEWORD
+    // poppet: the microWakeWord model lives in the mww_model partition, not in
+    // srmodels.bin, so selection is compile-time rather than driven by
+    // esp_srmodel_filter(). AFE (AEC/NS/VAD) still runs in front of it.
+    wake_word_ = std::make_unique<MicroWakeWord>();
+#elif CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
     if (esp_srmodel_filter(models_list_, ESP_MN_PREFIX, NULL) != nullptr) {
         wake_word_ = std::make_unique<CustomWakeWord>();
     } else if (esp_srmodel_filter(models_list_, ESP_WN_PREFIX, NULL) != nullptr) {
@@ -775,6 +795,13 @@ void AudioService::SetModelsList(srmodel_list_t* models_list) {
 }
 
 bool AudioService::IsAfeWakeWord() {
+#if CONFIG_USE_MICROWAKEWORD
+    // microWakeWord is also an always-listening on-device detector: it must be
+    // treated like AFE so wake detection is re-enabled after each turn.
+    if (wake_word_ != nullptr && dynamic_cast<MicroWakeWord*>(wake_word_.get()) != nullptr) {
+        return true;
+    }
+#endif
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
     return wake_word_ != nullptr && dynamic_cast<AfeWakeWord*>(wake_word_.get()) != nullptr;
 #else

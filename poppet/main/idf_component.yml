@@ -32,6 +32,20 @@ dependencies:
   espressif/led_strip: ~3.0.2
   espressif/esp_codec_dev: ~1.5.4
   espressif/esp-sr: ~2.3.0
+
+  # microWakeWord runtime (custom "Hey Artemis" TFLite). Both Apache-2.0.
+  # Gated on CONFIG_USE_MICROWAKEWORD so non-MWW builds don't pull the
+  # TFLite toolchain. See main/stackchan/wake_word/microwakeword_setup.md.
+  espressif/esp-tflite-micro:
+    version: "==1.3.7"
+    rules:
+    - if: "$CONFIG{USE_MICROWAKEWORD} == True"
+  esp-micro-speech-features:
+    git: https://github.com/kahrendt/ESPMicroSpeechFeatures.git
+    version: "351c4c69530f5a802da5433581c4863afadf0a00"
+    rules:
+    - if: "$CONFIG{USE_MICROWAKEWORD} == True"
+
   espressif/button: ~4.1.5
   espressif/knob: ^1.0.0
   espressif/esp32-camera:

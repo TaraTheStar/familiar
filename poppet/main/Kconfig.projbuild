@@ -730,6 +730,15 @@ choice WAKE_WORD_TYPE
         help
             Requires ESP32 S3 and PSRAM
 
+    config USE_MICROWAKEWORD
+        bool "microWakeWord (custom TFLite, e.g. Hey Artemis)"
+        depends on (IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4) && SPIRAM
+        help
+            Custom-trained microWakeWord (TFLite-Micro streaming) model,
+            run behind the AFE (AEC/NS/VAD) front-end. The model is flashed
+            to the mww_model partition, not srmodels.bin. Requires ESP32 S3
+            and PSRAM. See main/stackchan/wake_word/microwakeword_setup.md.
+
 endchoice
 
 config CUSTOM_WAKE_WORD
@@ -754,17 +763,39 @@ config CUSTOM_WAKE_WORD_THRESHOLD
     help
         Custom Wake Word Threshold, range 1-99, the smaller the more sensitive, default 20
 
+config MICROWAKEWORD_THRESHOLD
+    int "microWakeWord Threshold (%)"
+    default 95
+    range 1 99
+    depends on USE_MICROWAKEWORD
+    help
+        Windowed-probability cutoff (percent). A detection fires when the
+        mean probability over the last MICROWAKEWORD_SLIDING_WINDOW inferences
+        exceeds this. Set to your trained model manifest's
+        probability_cutoff x 100 (e.g. hey_jarvis = 0.97 -> 97). The model's
+        stride, quantization, and tensor-arena size are read from the .tflite
+        at runtime, so only these two thresholds are configured here.
+
+config MICROWAKEWORD_SLIDING_WINDOW
+    int "microWakeWord Sliding Window (inferences)"
+    default 5
+    range 1 30
+    depends on USE_MICROWAKEWORD
+    help
+        Number of consecutive inferences averaged before comparing to the
+        threshold. Match the model manifest's sliding_window_size (typically 5).
+
 config SEND_WAKE_WORD_DATA
     bool "Send Wake Word Data"
     default y
-    depends on USE_AFE_WAKE_WORD || USE_CUSTOM_WAKE_WORD
+    depends on USE_AFE_WAKE_WORD || USE_CUSTOM_WAKE_WORD || USE_MICROWAKEWORD
     help
         Send wake word data to the server as the first message of the conversation and wait for response
 
 config WAKE_WORD_DETECTION_IN_LISTENING
     bool "Enable Wake Word Detection in Listening Mode"
     default n
-    depends on USE_AFE_WAKE_WORD || USE_CUSTOM_WAKE_WORD
+    depends on USE_AFE_WAKE_WORD || USE_CUSTOM_WAKE_WORD || USE_MICROWAKEWORD
     help
         Enable wake word detection while in listening mode.
         When enabled, the device can detect wake word during listening,

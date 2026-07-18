@@ -15,11 +15,15 @@ CONFIG_BOARD_TYPE_M5STACK_STACK_CHAN=y
 #   idf.py menuconfig -> Xiaozhi Assistant -> Default OTA URL
 # Left blank intentionally: no cloud endpoint, no fallback.
 CONFIG_OTA_URL=""
-# Wake word: ESP-SR WakeNet9 model selection.
-# Active: Hi, ESP (best-trained English prebuilt — interim Path A, see docs/wake-word.md).
-# Long-term goal: replace with a microWakeWord "Hey Dotty" TFLite model — see
-#   firmware/main/stackchan/wake_word/microwakeword_setup.md for the integration plan.
-# Revert to Stack-Chan branding: comment the line below and uncomment the next one.
+# Wake word: microWakeWord "Hey Artemis" (custom TFLite streaming model, run
+# behind the AFE with WakeNet disabled). The model is flashed to the mww_model
+# partition — see main/stackchan/wake_word/microwakeword_setup.md.
+# THRESHOLD = probability_cutoff * 100; SLIDING_WINDOW from the trainer manifest.
+CONFIG_USE_MICROWAKEWORD=y
+CONFIG_MICROWAKEWORD_THRESHOLD=70
+CONFIG_MICROWAKEWORD_SLIDING_WINDOW=4
+# ESP-SR WakeNet9 prebuilt (Hi,ESP) — kept as a fallback, unused while
+# microWakeWord is active. Stack-Chan branding: swap the two lines below.
 CONFIG_SR_WN_WN9_HIESP=y
 # CONFIG_SR_WN_WN9_HISTACKCHAN_TTS3=y
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
