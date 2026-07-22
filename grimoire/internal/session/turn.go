@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 )
 
 // maxToolIterations caps the LLM→tool→LLM loop. The LLM should reach a
@@ -108,7 +108,7 @@ func (s *Session) handleTurn(ctx context.Context, micPCM []byte) {
 	// Seed dialogue with this user turn, shedding the oldest turns once the
 	// history outgrows the cap.
 	s.dialogueMu.Lock()
-	s.dialogue = append(s.dialogue, llm.Message{Role: llm.RoleUser, Content: transcript})
+	s.dialogue = append(s.dialogue, llm.Message{Role: "user", Content: transcript})
 	s.dialogue = trimDialogue(s.dialogue, maxDialogueMessages)
 	s.dialogueMu.Unlock()
 
@@ -180,7 +180,7 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 		s.dialogueMu.Lock()
 		msgs := make([]llm.Message, 0, len(s.dialogue)+1)
 		if s.cfg.SystemPrompt != "" {
-			msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: s.cfg.SystemPrompt})
+			msgs = append(msgs, llm.Message{Role: "system", Content: s.cfg.SystemPrompt})
 		}
 		msgs = append(msgs, s.dialogue...)
 		s.dialogueMu.Unlock()
@@ -195,7 +195,7 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 		// Record what the assistant just said + did.
 		s.dialogueMu.Lock()
 		s.dialogue = append(s.dialogue, llm.Message{
-			Role:      llm.RoleAssistant,
+			Role:      "assistant",
 			Content:   assembled,
 			ToolCalls: toolCalls,
 		})
@@ -219,7 +219,7 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 				deferred = append(deferred, tc)
 				s.dialogueMu.Lock()
 				s.dialogue = append(s.dialogue, llm.Message{
-					Role:       llm.RoleTool,
+					Role:       "tool",
 					ToolCallID: tc.ID,
 					Name:       tc.Function.Name,
 					Content:    "ok",
@@ -230,7 +230,7 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 			result, callErr := s.dispatchToolCall(ctx, tc)
 			s.dialogueMu.Lock()
 			s.dialogue = append(s.dialogue, llm.Message{
-				Role:       llm.RoleTool,
+				Role:       "tool",
 				ToolCallID: tc.ID,
 				Name:       tc.Function.Name,
 				Content:    result,
@@ -259,7 +259,7 @@ func (s *Session) runToolLoop(ctx context.Context) ([]llm.ToolCall, error) {
 // stream error — leaving the device out of Speaking.
 //
 // spoke reports whether any sentence was actually voiced.
-func (s *Session) streamReply(ctx context.Context, msgs []llm.Message, tools []llm.Tool) (assembled string, toolCalls []llm.ToolCall, spoke bool, err error) {
+func (s *Session) streamReply(ctx context.Context, msgs []llm.Message, tools []llm.ToolDef) (assembled string, toolCalls []llm.ToolCall, spoke bool, err error) {
 	var sb sentenceBuffer
 
 	// begin opens the Speaking session on the first voiced sentence: smile,
@@ -296,23 +296,26 @@ func (s *Session) streamReply(ctx context.Context, msgs []llm.Message, tools []l
 		}
 	}()
 
-	for ev, e := range s.cfg.LLM.Stream(ctx, msgs, tools) {
+	for ev, e := range llm.Stream(ctx, s.cfg.LLM, llm.ChatRequest{Messages: msgs, Tools: tools}) {
 		if e != nil {
 			return assembled, toolCalls, spoke, fmt.Errorf("llm stream: %w", e)
 		}
-		if ev.ToolCall != nil {
-			toolCalls = append(toolCalls, *ev.ToolCall)
-			continue
-		}
-		if ev.Content == "" {
-			continue
-		}
-		assembled += ev.Content
-		for _, sentence := range sb.Add(ev.Content) {
-			if e := speak(sentence); e != nil {
-				return assembled, toolCalls, spoke, fmt.Errorf("tts mid-stream: %w", e)
+		switch ev.Type {
+		case llm.EventToolCallComplete:
+			// azoth batches a turn's tool calls into one event.
+			toolCalls = append(toolCalls, ev.ToolCalls...)
+		case llm.EventTextDelta:
+			if ev.Text == "" {
+				continue
+			}
+			assembled += ev.Text
+			for _, sentence := range sb.Add(ev.Text) {
+				if e := speak(sentence); e != nil {
+					return assembled, toolCalls, spoke, fmt.Errorf("tts mid-stream: %w", e)
+				}
 			}
 		}
+		// Reasoning deltas, usage, and done events are ignored here.
 	}
 	// Speak any unterminated trailing fragment.
 	if tail := sb.Flush(); tail != "" {
@@ -334,7 +337,7 @@ func trimDialogue(msgs []llm.Message, max int) []llm.Message {
 		return msgs
 	}
 	for i := len(msgs) - max; i < len(msgs); i++ {
-		if msgs[i].Role == llm.RoleUser {
+		if msgs[i].Role == "user" {
 			return append(msgs[:0], msgs[i:]...) // slide down; keep the backing array
 		}
 	}

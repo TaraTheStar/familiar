@@ -25,7 +25,7 @@ import (
 	_ "time/tzdata" // embed the IANA tz database so LoadLocation works in the slim runtime image
 
 	"github.com/TaraTheStar/familiar/grimoire/internal/asr"
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 	"github.com/TaraTheStar/familiar/grimoire/internal/mcptools"
 	"github.com/TaraTheStar/familiar/grimoire/internal/ota"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
@@ -154,13 +154,17 @@ func main() {
 			"whisper_version", asr.Version())
 	}
 
-	var llmClient *llm.Client
+	var llmClient *llm.OpenAIClient
 	if *llmURL != "" {
-		llmClient = &llm.Client{
-			BaseURL:   *llmURL,
+		llmClient = &llm.OpenAIClient{
+			Endpoint:  *llmURL,
 			Model:     *llmModel,
 			APIKey:    *llmAPIKey,
 			MaxTokens: *llmMaxTokens,
+			// Adopted from azoth: retry a couple of transient HTTP statuses
+			// (429/502/503/504) and guard against mid-stream degeneration.
+			StatusRetries: 2,
+			LoopGuard:     true,
 		}
 		logger.Info("LLM configured", "llm_url", *llmURL, "model", *llmModel)
 	}

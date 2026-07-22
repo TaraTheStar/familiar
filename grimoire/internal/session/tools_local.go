@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 )
 
 // Server-side tools.
@@ -32,7 +32,7 @@ type localToolHandler func(ctx context.Context, args json.RawMessage) (string, e
 // device catalog. Implementations must be safe for concurrent use.
 type ToolProvider interface {
 	// Tools is the LLM tool catalog this provider contributes.
-	Tools() []llm.Tool
+	Tools() []llm.ToolDef
 	// Handles reports whether a tool name belongs to this provider.
 	Handles(name string) bool
 	// Call invokes the named tool. On a tool-level failure it returns descriptive
@@ -42,15 +42,15 @@ type ToolProvider interface {
 
 // buildLocalTools returns the server-side tool descriptors to advertise plus
 // the handler map to dispatch them. Called once per session at construction.
-func (s *Session) buildLocalTools() ([]llm.Tool, map[string]localToolHandler) {
-	tools := []llm.Tool{
+func (s *Session) buildLocalTools() ([]llm.ToolDef, map[string]localToolHandler) {
+	tools := []llm.ToolDef{
 		{
 			Type: "function",
-			Function: llm.ToolFunction{
+			Function: llm.ToolFunctionDef{
 				Name:        "get_current_time",
 				Description: "Get the current local date and time. Call this whenever the user asks what time it is, what the date is, or what day it is.",
 				// No arguments.
-				Parameters: json.RawMessage(`{"type":"object","properties":{}}`),
+				Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 			},
 		},
 	}

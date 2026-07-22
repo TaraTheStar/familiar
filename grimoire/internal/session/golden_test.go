@@ -18,7 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protov2"
 	"github.com/TaraTheStar/familiar/grimoire/internal/tts"
@@ -265,7 +265,7 @@ func TestGoldenV2TurnMultiSentence(t *testing.T) {
 		MCPInitTimeout:   200 * time.Millisecond,
 		Kokoro:           &tts.KokoroClient{BaseURL: kokoro.URL},
 		ASR:              &fakeASR{out: "what time is it"},
-		LLM:              &llm.Client{BaseURL: llmServer.URL, Model: "test-model"},
+		LLM:              &llm.OpenAIClient{Endpoint: llmServer.URL, Model: "test-model"},
 		SystemPrompt:     "You are a test robot.",
 	}, func(t *testing.T, ctx context.Context, conn *websocket.Conn) {
 		mustWriteText(t, ctx, conn, mustJSON(t, protov2.ListenStart{Type: "listen_start", Mode: "auto"}))

@@ -15,7 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protov2"
 	"github.com/TaraTheStar/familiar/grimoire/internal/tts"
@@ -39,7 +39,7 @@ func TestToolLoopV2Inline(t *testing.T) {
 		MCPInitTimeout:   2 * time.Second,
 		Kokoro:           &tts.KokoroClient{BaseURL: kokoro.URL},
 		ASR:              &fakeASR{out: "set volume to 60"},
-		LLM:              &llm.Client{BaseURL: llmServer.URL, Model: "test"},
+		LLM:              &llm.OpenAIClient{Endpoint: llmServer.URL, Model: "test"},
 	}))
 	defer srv.Close()
 
@@ -161,7 +161,7 @@ func TestToolLoopV2InlineFallback(t *testing.T) {
 		MCPInitTimeout:   2 * time.Second,
 		Kokoro:           &tts.KokoroClient{BaseURL: kokoro.URL},
 		ASR:              &fakeASR{out: "set volume to 60"},
-		LLM:              &llm.Client{BaseURL: llmServer.URL, Model: "test"},
+		LLM:              &llm.OpenAIClient{Endpoint: llmServer.URL, Model: "test"},
 	}))
 	defer srv.Close()
 

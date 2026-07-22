@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 )
 
 // This file defines the tool seam, the device-tool analogue of the deviceOut /
@@ -47,7 +47,7 @@ type toolPort interface {
 }
 
 // initTools discovers the device tool catalog through the active port and
-// converts it to the llm.Tool form the LLM consumes, plus a name index. Best-
+// converts it to the llm.ToolDef form the LLM consumes, plus a name index. Best-
 // effort: discovery failure only means the session runs without device tools
 // (server-side local tools still work). MUST run on a goroutine — discovery
 // waits on responses that arrive on the read loop.
@@ -93,13 +93,13 @@ func (s *Session) initTools(ctx context.Context) {
 		"source", "tool_list")
 }
 
-// registerTools converts descriptors to the llm.Tool form the LLM consumes,
+// registerTools converts descriptors to the llm.ToolDef form the LLM consumes,
 // plus a name index, and installs both as the session's catalog. Returns the
 // number exposed to the LLM. A descriptor is skipped if it has no name
 // (malformed) or its permission isn't LLM-exposable. Shared by the tools_inline
 // fast path and tool_list discovery.
 func (s *Session) registerTools(descs []toolDescriptor) (exposed int) {
-	tools := make([]llm.Tool, 0, len(descs))
+	tools := make([]llm.ToolDef, 0, len(descs))
 	byName := make(map[string]toolDescriptor, len(descs))
 	for _, d := range descs {
 		// Only public tools are exposed to the LLM (PROTOCOL_V2 §6.1): user_only
@@ -110,12 +110,18 @@ func (s *Session) registerTools(descs []toolDescriptor) (exposed int) {
 		if d.Name == "" || !exposedToLLM(d.Permission) {
 			continue
 		}
-		tools = append(tools, llm.Tool{
+		// azoth's ToolFunctionDef takes the JSON Schema as a decoded map;
+		// descriptors carry it as raw JSON, so decode it here.
+		var params map[string]any
+		if len(d.Schema) > 0 {
+			_ = json.Unmarshal(d.Schema, &params)
+		}
+		tools = append(tools, llm.ToolDef{
 			Type: "function",
-			Function: llm.ToolFunction{
+			Function: llm.ToolFunctionDef{
 				Name:        d.Name,
 				Description: d.Description,
-				Parameters:  d.Schema,
+				Parameters:  params,
 			},
 		})
 		byName[d.Name] = d

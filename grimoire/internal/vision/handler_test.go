@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 )
 
 // TestVisionEndpointForwardsToLLM: a fake multimodal LLM returns
@@ -33,7 +33,7 @@ func TestVisionEndpointForwardsToLLM(t *testing.T) {
 	defer llmServer.Close()
 
 	visionSrv := httptest.NewServer(Handler(Config{
-		LLM: &llm.Client{BaseURL: llmServer.URL, Model: "multimodal-test"},
+		LLM: &llm.OpenAIClient{Endpoint: llmServer.URL, Model: "multimodal-test"},
 	}))
 	defer visionSrv.Close()
 
@@ -81,7 +81,7 @@ func TestVisionEndpointForwardsToLLM(t *testing.T) {
 }
 
 func TestVisionRejectsNonPost(t *testing.T) {
-	srv := httptest.NewServer(Handler(Config{LLM: &llm.Client{BaseURL: "http://unused"}}))
+	srv := httptest.NewServer(Handler(Config{LLM: &llm.OpenAIClient{Endpoint: "http://unused"}}))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL)
@@ -95,7 +95,7 @@ func TestVisionRejectsNonPost(t *testing.T) {
 }
 
 func TestVisionRejectsEmptyImage(t *testing.T) {
-	srv := httptest.NewServer(Handler(Config{LLM: &llm.Client{BaseURL: "http://unused"}}))
+	srv := httptest.NewServer(Handler(Config{LLM: &llm.OpenAIClient{Endpoint: "http://unused"}}))
 	defer srv.Close()
 
 	body := &bytes.Buffer{}

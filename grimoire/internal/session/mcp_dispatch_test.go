@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 )
 
 // fakeProvider is a ToolProvider stand-in (no real MCP) that records calls, so
@@ -22,10 +22,10 @@ type fakeProvider struct {
 	calls []string
 }
 
-func (f *fakeProvider) Tools() []llm.Tool {
-	return []llm.Tool{{
+func (f *fakeProvider) Tools() []llm.ToolDef {
+	return []llm.ToolDef{{
 		Type:     "function",
-		Function: llm.ToolFunction{Name: "mcp__fetch__fetch", Description: "fetch a url"},
+		Function: llm.ToolFunctionDef{Name: "mcp__fetch__fetch", Description: "fetch a url"},
 	}}
 }
 
@@ -64,7 +64,7 @@ func TestDispatchRoutesToServerTool(t *testing.T) {
 	res, err := s.dispatchToolCall(context.Background(), llm.ToolCall{
 		ID:       "1",
 		Type:     "function",
-		Function: llm.ToolCallFunction{Name: "mcp__fetch__fetch", Arguments: `{"url":"x"}`},
+		Function: llm.FunctionCall{Name: "mcp__fetch__fetch", Arguments: `{"url":"x"}`},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)

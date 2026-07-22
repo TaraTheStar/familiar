@@ -23,7 +23,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 )
 
 // connectTimeout bounds the initialize + tools/list handshake per server. A
@@ -66,7 +66,7 @@ type serverTool struct {
 // themselves safe for concurrent calls.
 type Manager struct {
 	log      *slog.Logger
-	tools    []llm.Tool
+	tools    []llm.ToolDef
 	handlers map[string]serverTool
 	sessions []*mcp.ClientSession
 }
@@ -153,15 +153,17 @@ func (m *Manager) connect(ctx context.Context, name string, transport mcp.Transp
 			continue
 		}
 		namespaced := toolName(name, t.Name)
-		var params json.RawMessage
+		// azoth's ToolFunctionDef takes the schema as a decoded map; the SDK
+		// gives us a schema struct, so round-trip it through JSON.
+		var params map[string]any
 		if t.InputSchema != nil {
 			if b, err := json.Marshal(t.InputSchema); err == nil {
-				params = b
+				_ = json.Unmarshal(b, &params)
 			}
 		}
-		m.tools = append(m.tools, llm.Tool{
+		m.tools = append(m.tools, llm.ToolDef{
 			Type: "function",
-			Function: llm.ToolFunction{
+			Function: llm.ToolFunctionDef{
 				Name:        namespaced,
 				Description: t.Description,
 				Parameters:  params,
@@ -179,7 +181,7 @@ func toolName(server, tool string) string { return "mcp__" + server + "__" + too
 
 // Tools returns the aggregated LLM tool catalog (namespaced). Safe to call
 // concurrently; the slice is built once at New and never mutated.
-func (m *Manager) Tools() []llm.Tool { return m.tools }
+func (m *Manager) Tools() []llm.ToolDef { return m.tools }
 
 // Handles reports whether name is one of this Manager's namespaced tools.
 func (m *Manager) Handles(name string) bool {

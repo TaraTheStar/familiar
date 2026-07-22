@@ -5,11 +5,11 @@ package session
 import (
 	"testing"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 )
 
 func tc(name, args string) llm.ToolCall {
-	return llm.ToolCall{Function: llm.ToolCallFunction{Name: name, Arguments: args}}
+	return llm.ToolCall{Function: llm.FunctionCall{Name: name, Arguments: args}}
 }
 
 func TestIsSleepCommand(t *testing.T) {

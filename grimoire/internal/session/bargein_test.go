@@ -13,7 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protov2"
 	"github.com/TaraTheStar/familiar/grimoire/internal/tts"
@@ -93,7 +93,7 @@ func TestV2BargeIn(t *testing.T) {
 		AudioCreditInitial: 1, // 1 frame then the stream blocks awaiting credit we never send
 		Kokoro:             &tts.KokoroClient{BaseURL: kokoro.URL},
 		ASR:                &fakeASR{out: "tell me a story"},
-		LLM:                &llm.Client{BaseURL: llmServer.URL, Model: "test"},
+		LLM:                &llm.OpenAIClient{Endpoint: llmServer.URL, Model: "test"},
 	})
 	defer srv.Close()
 	defer conn.Close(websocket.StatusNormalClosure, "")
@@ -161,7 +161,7 @@ func TestV2LLMFailedError(t *testing.T) {
 		MCPInitTimeout:   200 * time.Millisecond,
 		Kokoro:           &tts.KokoroClient{BaseURL: kokoro.URL},
 		ASR:              &fakeASR{out: "what time is it"},
-		LLM:              &llm.Client{BaseURL: llmServer.URL, Model: "test"},
+		LLM:              &llm.OpenAIClient{Endpoint: llmServer.URL, Model: "test"},
 	})
 	defer srv.Close()
 	defer conn.Close(websocket.StatusNormalClosure, "")

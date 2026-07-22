@@ -27,7 +27,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/TaraTheStar/familiar/grimoire/internal/audio"
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protov2"
 	"github.com/TaraTheStar/familiar/grimoire/internal/tts"
@@ -92,7 +92,7 @@ type Config struct {
 
 	// LLM is the streaming chat-completions client. nil → LLM step is
 	// skipped.
-	LLM *llm.Client
+	LLM *llm.OpenAIClient
 
 	// WakeGate enables the server-side adversarial wake gate (wakegate.go):
 	// the first turn after a wake-word pre-roll is dropped — and the session
@@ -370,10 +370,10 @@ type Session struct {
 	toolPort toolPort
 
 	// tools is the device tool catalog discovered by initTools, pre-converted
-	// to llm.Tool format for fast injection into LLM requests. Empty until
+	// to llm.ToolDef format for fast injection into LLM requests. Empty until
 	// discovery finishes, or if the device exposed no tools.
 	toolsMu sync.RWMutex
-	tools   []llm.Tool
+	tools   []llm.ToolDef
 	// toolByName indexes the discovered tools by name (carries permission for
 	// future LLM-exposure filtering).
 	toolByName map[string]toolDescriptor
@@ -390,7 +390,7 @@ type Session struct {
 	// localTools are server-side tools (e.g. get_current_time) advertised to
 	// the LLM alongside the device's MCP tools. localHandlers dispatches them
 	// without going over MCP. Both set once at construction, read-only after.
-	localTools    []llm.Tool
+	localTools    []llm.ToolDef
 	localHandlers map[string]localToolHandler
 }
 
@@ -433,17 +433,17 @@ func (s *Session) run(ctx context.Context) {
 
 // snapshotTools returns a copy of the current tool list (safe to pass
 // to a long-running LLM stream).
-func (s *Session) snapshotTools() []llm.Tool {
+func (s *Session) snapshotTools() []llm.ToolDef {
 	s.toolsMu.RLock()
 	defer s.toolsMu.RUnlock()
 	// Device (MCP) tools first, then per-session local tools, then any
 	// process-global server tools (external MCP, etc). localTools is set once at
 	// construction and ServerTools is process-global, so both are safe to read.
-	var serverTools []llm.Tool
+	var serverTools []llm.ToolDef
 	if s.cfg.ServerTools != nil {
 		serverTools = s.cfg.ServerTools.Tools()
 	}
-	out := make([]llm.Tool, 0, len(s.tools)+len(s.localTools)+len(serverTools))
+	out := make([]llm.ToolDef, 0, len(s.tools)+len(s.localTools)+len(serverTools))
 	out = append(out, s.tools...)
 	out = append(out, s.localTools...)
 	out = append(out, serverTools...)

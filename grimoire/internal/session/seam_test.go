@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 	"github.com/TaraTheStar/familiar/grimoire/internal/tts"
 )
@@ -94,7 +94,7 @@ func newLoopTestSession(t *testing.T, transcript string, deltas ...string) (*Ses
 			MicAudio: protocol.AudioParams{SampleRate: 16000, Channels: 1, FrameDuration: 60},
 			Kokoro:   &tts.KokoroClient{BaseURL: kokoro.URL},
 			ASR:      &fakeASR{out: transcript},
-			LLM:      &llm.Client{BaseURL: llmServer.URL, Model: "test-model"},
+			LLM:      &llm.OpenAIClient{Endpoint: llmServer.URL, Model: "test-model"},
 		},
 		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		out: out,

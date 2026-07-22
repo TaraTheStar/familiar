@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protov2"
 	"github.com/TaraTheStar/familiar/grimoire/internal/session"
@@ -85,7 +85,7 @@ func baseConfig(kokoroURL, llmURL, transcript string) session.Config {
 		MCPInitTimeout:   300 * time.Millisecond,
 		Kokoro:           &tts.KokoroClient{BaseURL: kokoroURL},
 		ASR:              fakeASR{out: transcript},
-		LLM:              &llm.Client{BaseURL: llmURL, Model: "test-model"},
+		LLM:              &llm.OpenAIClient{Endpoint: llmURL, Model: "test-model"},
 	}
 }
 

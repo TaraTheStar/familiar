@@ -33,7 +33,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/llm"
+	"github.com/TaraTheStar/azoth/llm"
 )
 
 // Config holds the runtime knobs.
@@ -41,7 +41,7 @@ type Config struct {
 	// LLM is the multimodal chat-completions client. Must point at a
 	// model that supports image_url content (gemma4 with mmproj, qwen3.6,
 	// etc.). Required.
-	LLM *llm.Client
+	LLM *llm.OpenAIClient
 
 	// MaxImageBytes caps incoming JPEGs. 0 → 8 MiB. The device's max
 	// camera resolution rarely exceeds 1 MB but defensive limits keep
@@ -131,17 +131,17 @@ func Handler(cfg Config) http.HandlerFunc {
 // streamed content into a single string for the response body.
 func describe(ctx context.Context, cfg Config, question string, jpeg []byte) (string, error) {
 	msgs := []llm.Message{
-		{Role: llm.RoleSystem, Content: cfg.SystemPrompt},
-		llm.UserMultimodal(question, jpeg),
+		{Role: "system", Content: cfg.SystemPrompt},
+		{Role: "user", Content: question, Parts: []llm.MessagePart{llm.NewImagePart("image/jpeg", jpeg)}},
 	}
 
 	var sb strings.Builder
-	for ev, err := range cfg.LLM.Stream(ctx, msgs, nil) {
+	for ev, err := range llm.Stream(ctx, cfg.LLM, llm.ChatRequest{Messages: msgs}) {
 		if err != nil {
 			return "", err
 		}
-		if ev.Content != "" {
-			sb.WriteString(ev.Content)
+		if ev.Type == llm.EventTextDelta {
+			sb.WriteString(ev.Text)
 		}
 		// Tool calls would be unusual here (we passed no tools); ignore.
 	}
