@@ -54,8 +54,9 @@ server (`grimoire`), proven on real hardware, plus three new features.
   server still does not answer device-initiated tool calls.)*
 - **Pluggable familiar faces.** Selectable avatar "familiars" (e.g. a **cat**) on
   top of the existing emotion/animation system, switchable by voice via the
-  `self.avatar.set_familiar` tool and persisted in NVS. Ships a placeholder cat;
-  add more by dropping `<name>_*.png` art and registering the name.
+  `self.avatar.set_familiar` tool and persisted in NVS. Ships four sprite
+  familiars — cat, bat, toad, and fox; add more by dropping `<name>_*.png` art
+  and registering the name.
 
 ## Server (`grimoire`)
 
@@ -90,7 +91,7 @@ server (`grimoire`), proven on real hardware, plus three new features.
 ## Deferred to v2.1 (post-release)
 
 - **Barge-in / full-duplex (server-side AEC)** and its dependency **hello
-  renegotiation**. **v1 ships half-duplex** — wait for the reply to finish before
+  renegotiation**. **v2 ships half-duplex** — wait for the reply to finish before
   speaking again. All the hooks are reserved in the
   v2 contract, so this is a clean fast-follow, not a re-architecture.
 - **Per-word `caption.segments`** — current TTS (Kokoro) provides no word timing.

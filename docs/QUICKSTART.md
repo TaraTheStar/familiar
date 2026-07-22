@@ -34,7 +34,7 @@ Two addresses matter below; substitute yours throughout:
 ## 1. Clone
 
 ```bash
-git clone <repo-url> familiar && cd familiar
+git clone https://github.com/TaraTheStar/familiar.git && cd familiar
 git submodule update --init --recursive   # whisper.cpp (pinned, vendored)
 ```
 

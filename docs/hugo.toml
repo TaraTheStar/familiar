@@ -1,7 +1,7 @@
 # Hugo site config for the familiar user guide.
 # Local preview:  hugo server --source docs      (from the repo root)
 # Build:          hugo --source docs             (output in docs/public/)
-# Deployed by .github/workflows/pages.yml (Settings → Pages → Source: GitHub Actions).
+# Deployed to GitHub Pages by .github/workflows/docs.yml.
 
 baseURL = "https://tarathestar.github.io/familiar/"
 title = "familiar"

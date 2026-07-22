@@ -1,4 +1,8 @@
-# familiar
+<p align="center">
+  <img src="docs/assets/logo.svg" width="170" alt="familiar logo — a small creature with glowing eyes peering out from under a witch's hat">
+</p>
+
+<h1 align="center">familiar</h1>
 
 A self-hosted, local-network voice companion for the [StackChan](https://github.com/m5stack/StackChan)
 ESP32-S3 robot. No cloud: the little robot on your desk wakes when called, hears
@@ -9,9 +13,7 @@ person. This repo holds the two halves of ours.
 
 **📖 Full user guide:** [QUICKSTART](docs/QUICKSTART.md) in-repo, or the
 [docs site](docs/) — quickstart, day-to-day usage, and deep dives on both
-halves. The site is Hugo-built and auto-deployed to GitHub Pages by
-[`.github/workflows/docs.yml`](.github/workflows/docs.yml) (one-time setup:
-Settings → Pages → Source: *GitHub Actions*); preview locally with
+halves. The site is Hugo-built; preview it locally with
 `hugo server --source docs`.
 
 ## The familiars
@@ -61,7 +63,7 @@ familiar/
 ## First clone
 
 ```
-git clone <url> familiar
+git clone https://github.com/TaraTheStar/familiar.git
 cd familiar
 git submodule update --init --recursive   # pulls whisper.cpp for grimoire
 ```
