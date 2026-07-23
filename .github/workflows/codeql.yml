@@ -62,7 +62,7 @@ jobs:
 
       - name: Cache whisper.cpp build
         if: matrix.language == 'go'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: grimoire/third_party/whisper.cpp/build
           key: whisper-${{ runner.os }}-${{ steps.whisper.outputs.sha }}
