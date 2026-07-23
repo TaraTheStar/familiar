@@ -22,8 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - language: go
-            build-mode: none
+          # Go is intentionally omitted: its only module (grimoire) links
+          # whisper.cpp + libopus via cgo, and Go has no build-less extraction
+          # mode ("none" is C/C++/Python only), so scanning it would require a
+          # full whisper.cpp cmake build on every run — not worth the CI minutes.
+          # C/C++ and Python cover where the actual findings live and cost
+          # nothing to extract (no compilation).
           - language: c-cpp
             build-mode: none
           - language: python
@@ -31,16 +35,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
