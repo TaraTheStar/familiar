@@ -4,14 +4,14 @@ import argparse
 
 
 '''
-  Create a UDP socket and bind it to the server's IP:8000.
+  Create a UDP socket and bind it to host:8000.
   Listen for incoming messages and print them to the console.
   Save the audio to a WAV file.
 '''
-def main(samplerate, channels):
+def main(samplerate, channels, host):
     # Create a UDP socket
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    server_socket.bind(('0.0.0.0', 8000))
+    server_socket.bind((host, 8000))
 
     # Create WAV file with parameters
     filename = f"{samplerate}_{channels}.wav"
@@ -20,22 +20,22 @@ def main(samplerate, channels):
     wav_file.setsampwidth(2)            # 2 bytes per sample (16-bit)
     wav_file.setframerate(samplerate)   # samplerate parameter
 
-    print(f"Start saving audio from 0.0.0.0:8000 to {filename}...")
+    print(f"Start saving audio from {host}:8000 to {filename}...")
 
     try:
         while True:
             # Receive a message from the client
             message, address = server_socket.recvfrom(8000)
-            
+
             # Write PCM data to WAV file
             wav_file.writeframes(message)
 
             # Print length of the message
             print(f"Received {len(message)} bytes from {address}")
-    
+
     except KeyboardInterrupt:
         print("\nStopping recording...")
-    
+
     finally:
         # Close files and socket
         wav_file.close()
@@ -44,11 +44,13 @@ def main(samplerate, channels):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='UDP音频数据接收器，保存为WAV文件')
-    parser.add_argument('--samplerate', '-s', type=int, default=16000, 
-                        help='采样率 (默认: 16000)')
-    parser.add_argument('--channels', '-c', type=int, default=2, 
-                        help='声道数 (默认: 2)')
-    
+    parser = argparse.ArgumentParser(description='UDP audio data receiver that saves to a WAV file')
+    parser.add_argument('--samplerate', '-s', type=int, default=16000,
+                        help='Sample rate (default: 16000)')
+    parser.add_argument('--channels', '-c', type=int, default=2,
+                        help='Number of channels (default: 2)')
+    parser.add_argument('--host', '-H', default='127.0.0.1',
+                        help='Bind address (default: 127.0.0.1; to receive from devices on the LAN, explicitly pass this machine\'s LAN IP or 0.0.0.0)')
+
     args = parser.parse_args()
-    main(args.samplerate, args.channels)
+    main(args.samplerate, args.channels, args.host)

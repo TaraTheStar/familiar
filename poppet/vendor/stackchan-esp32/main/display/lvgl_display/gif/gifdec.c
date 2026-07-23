@@ -121,13 +121,13 @@ static gd_GIF * gif_open(gd_GIF * gif_base)
         ESP_LOGW(TAG, "Image dimensions are too large");
         goto fail;
     } 
-    gif = lv_malloc(sizeof(gd_GIF) + 5 * width * height + LZW_CACHE_SIZE);
+    gif = lv_malloc(sizeof(gd_GIF) + (size_t)5 * width * height + LZW_CACHE_SIZE);
 #else
     if(0 == (INT_MAX - sizeof(gd_GIF)) / width / height / 5){
         ESP_LOGW(TAG, "Image dimensions are too large");
         goto fail;
     } 
-    gif = lv_malloc(sizeof(gd_GIF) + 5 * width * height);
+    gif = lv_malloc(sizeof(gd_GIF) + (size_t)5 * width * height);
 #endif
     if(!gif) goto fail;
     memcpy(gif, gif_base, sizeof(gd_GIF));
@@ -156,7 +156,7 @@ static gd_GIF * gif_open(gd_GIF * gif_base)
         gif->canvas[i * 4 + 0] = *(bgcolor + 2);
         gif->canvas[i * 4 + 1] = *(bgcolor + 1);
         gif->canvas[i * 4 + 2] = *(bgcolor + 0);
-        gif->canvas[i * 4 + 3] = 0x00;  // 初始化为透明，让第一帧根据自己的透明度设置来渲染
+        gif->canvas[i * 4 + 3] = 0x00;  // Initialize as transparent so the first frame renders according to its own transparency settings
     }
 #endif
     gif->anim_start = f_gif_seek(gif, 0, LV_FS_SEEK_CUR);
