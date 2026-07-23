@@ -3,11 +3,11 @@ import re
 import sys
 
 # ==========================================
-# Configuration / 配置
+# Configuration
 # ==========================================
 
 # Directories to exclude from scanning
-# 不需要扫描的目录
+# Directories that do not need to be scanned
 EXCLUDE_DIRS = {
     '.git', 
     '.idea', 
@@ -16,7 +16,7 @@ EXCLUDE_DIRS = {
 }
 
 def load_gitignore():
-    """Load exclusions from .gitignore / 从 .gitignore 加载排除项"""
+    """Load exclusions from .gitignore"""
     if os.path.exists('.gitignore'):
         print("Loading .gitignore...")
         with open('.gitignore', 'r') as f:
@@ -25,11 +25,11 @@ def load_gitignore():
                 if not line or line.startswith('#'): continue
                 
                 # Normalize path: remove leading/trailing slashes
-                # 简单处理：移除开头结尾的斜杠
+                # Simple handling: strip leading and trailing slashes
                 clean_item = line.rstrip('/').lstrip('/')
                 
                 # Skip patterns with wildcards (simple directory names only)
-                # 跳过带通配符的复杂规则，仅添加确定的目录名
+                # Skip complex rules with wildcards; only add plain directory names
                 if '*' not in clean_item:
                     EXCLUDE_DIRS.add(clean_item)
 
@@ -37,7 +37,7 @@ def load_gitignore():
 load_gitignore()
 
 # File extensions to exclude (binary files, images, etc.)
-# 不需要扫描的文件类型
+# File types that do not need to be scanned
 EXCLUDE_EXTENSIONS = {
     '.o', '.a', '.elf', '.bin', '.map', '.hex', 
     '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', 
@@ -47,39 +47,39 @@ EXCLUDE_EXTENSIONS = {
 }
 
 # Regular expressions for sensitive data
-# 敏感信息的正则表达式匹配规则
+# Regular expression rules for matching sensitive data
 PATTERNS = [
     # 1. IP Addresses (Exclude localhost and common local IPs)
-    # 匹配可能的硬编码公网 IP (排除 127.0.0.1, 0.0.0.0, 192.168.x.x)
+    # Match possible hardcoded public IPs (excluding 127.0.0.1, 0.0.0.0, 192.168.x.x)
     (r'\b(?!127\.0\.0\.1|0\.0\.0\.0|192\.168\.)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', "Potential Public IP"),
     
     # 2. Key/Secret Assignments
-    # 匹配变量赋值: 变量名包含 key/secret/token/password 等
+    # Match variable assignments where the name contains key/secret/token/password, etc.
     # regex matches: variable_name = "value" OR variable_name: "value"
     (r'(?i)(api[_-]?key|secret|token|password|passwd|pwd|auth|access[_-]?key|client[_-]?secret|private[_-]?key)\s*[:=]\s*["\']([^"\']+)["\']', "Potential Secret/Key"),
     
     # 3. WiFi Credentials
-    # 匹配 WiFi SSID 或 Password
+    # Match WiFi SSID or password
     (r'(?i)(ssid|wifi[_-]?pass(word)?)\s*[:=]\s*["\']([^"\']+)["\']', "Potential WiFi Credential"),
     
     # 4. URLs with Credentials
-    # 匹配 http://user:pass@host 格式
+    # Match the http://user:pass@host format
     (r'https?://[^:\s]+:[^@\s]+@[^/\s]+', "URL with Credentials"),
     
     # 5. Cryptographic Key Headers (Private/Public)
-    # 匹配 RSA/DSA 私钥或公钥头
+    # Match RSA/DSA private or public key headers
     (r'-----BEGIN\s+[A-Z\s]+KEY-----', "Cryptographic Key Block"),
     
     # 6. AWS Access Key ID (Common Pattern)
     (r'\bAKIA[0-9A-Z]{16}\b', "AWS Access Key ID"),
 
     # 7. Generic high-entropy strings (simplified view for Bearer tokens etc)
-    # 匹配 "Bearer <token>" 格式
+    # Match the "Bearer <token>" format
     (r'Bearer\s+[a-zA-Z0-9\-\._~\+/]{20,}', "Potential Bearer Token"),
 ]
 
 # Allow-list for dummy values (Common placeholders to ignore)
-# 白名单：如果是这些值，则不认为是泄露
+# Allow-list: values listed here are not treated as leaks
 ALLOW_LIST = {
     "", 
     "your_ssid", "your_password", "password", "12345678", "00000000",
@@ -87,7 +87,7 @@ ALLOW_LIST = {
 }
 
 # ==========================================
-# Script Logic / 逻辑实现
+# Script Logic
 # ==========================================
 
 def is_text_file(filepath):

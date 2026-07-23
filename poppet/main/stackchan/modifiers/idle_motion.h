@@ -62,7 +62,7 @@ public:
         : _interval_min(interval_min), _interval_max(interval_max)
     {
         uint32_t now = GetHAL().millis();
-        _next_tick = now + 1000;          // 启动 1 秒后开始第一次动作
+        _next_tick = now + 1000;          // Start the first motion 1 second after startup
         _last_tracking_active_ms = now;   // Empty-room timer starts at boot.
     }
 
@@ -141,18 +141,18 @@ public:
 
         uint32_t now = GetHAL().millis();
 
-        // 如果时间没到，直接跳过
+        // If it is not yet time, skip
         if (now < _next_tick) {
             return;
         }
 
-        // 如果上次动作还没做完，就把下一次尝试推迟 500ms，避免指令堆积
+        // If the previous motion is not finished, defer the next attempt by 500ms to avoid piling up commands
         if (stackchan.motion().isMoving()) {
             _next_tick = now + 500;
             return;
         }
 
-        // 执行动作 — tracking mode picks the reduced overlay set, idle mode
+        // Perform the motion — tracking mode picks the reduced overlay set, idle mode
         // picks the full four-action mix.
         if (_tracking_mode) {
             perform_tracking_overlay(stackchan, now);
@@ -160,7 +160,7 @@ public:
             perform_idle_motion(stackchan);
         }
 
-        // 算下一次的时间间隔 — overlay uses a longer cadence than full idle.
+        // Compute the next interval — overlay uses a longer cadence than full idle.
         // Overlay range is settable via setIntervalRange (Phase 3); idle range
         // stays at constructor defaults. When idle and the empty-room
         // threshold has elapsed, draw from the slow range instead.

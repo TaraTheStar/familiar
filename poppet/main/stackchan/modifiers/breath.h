@@ -18,10 +18,10 @@ namespace stackchan {
 class BreathModifier : public Modifier {
 public:
     /**
-     * @param destroyAfterMs 持续时间（0 为永久）
-     * @param amplitude 呼吸幅度，单位像素
-     * @param breathCycleMs 呼吸一次的周期（吸+呼）
-     * @param updateIntervalMs 更新间隔
+     * @param destroyAfterMs Duration (0 = forever)
+     * @param amplitude Breathing amplitude, in pixels
+     * @param breathCycleMs Period of one breath (inhale + exhale)
+     * @param updateIntervalMs Update interval
      */
     BreathModifier(uint32_t destroyAfterMs = 0, int amplitude = 16, uint32_t breathCycleMs = 6600,
                    uint32_t updateIntervalMs = 600)
@@ -40,9 +40,9 @@ public:
 
         uint32_t now = GetHAL().millis();
 
-        // 销毁逻辑
+        // Destroy logic
         if (_has_lifetime && now >= _destroy_at) {
-            reset_position(stackchan.avatar());  // 销毁前复位
+            reset_position(stackchan.avatar());  // Reset position before destroying
             requestDestroy();
             return;
         }
@@ -52,26 +52,26 @@ public:
         }
         _last_update_tick = now;
 
-        // 使用正弦波计算偏移量
-        // (now - _start_tick) / cycle 得到进度，乘以 2PI 传给 sin
+        // Use a sine wave to calculate the offset
+        // (now - _start_tick) / cycle gives progress, multiplied by 2PI and passed to sin
         float phase   = (float)((now - _start_tick) % _breath_cycle_ms) / _breath_cycle_ms;
         float sin_val = sinf(phase * 2.0f * M_PI);
 
-        // 计算当前偏移
+        // Calculate the current offset
         int current_offset = static_cast<int>(sin_val * _amplitude);
 
-        // 应用增量偏移
+        // Apply the incremental offset
         apply_relative_offset(stackchan.avatar(), current_offset);
     }
 
 private:
     void apply_relative_offset(avatar::Avatar& avatar, int new_offset)
     {
-        // 计算本次需要移动的差值
+        // Calculate the delta to move this time
         int delta = new_offset - _last_applied_offset;
         if (delta == 0) return;
 
-        // 批量移动五官
+        // Move the facial features together
         move_component(avatar.leftEye(), delta);
         move_component(avatar.rightEye(), delta);
         move_component(avatar.mouth(), delta);
@@ -88,7 +88,7 @@ private:
 
     void reset_position(avatar::Avatar& avatar)
     {
-        // 将偏移归零
+        // Zero out the offset
         apply_relative_offset(avatar, 0);
     }
 
@@ -100,7 +100,7 @@ private:
     uint32_t _destroy_at       = 0;
     bool _has_lifetime         = false;
 
-    int _last_applied_offset = 0;  // 记录上一次应用的偏移量，用于增量更新
+    int _last_applied_offset = 0;  // Records the last applied offset, used for incremental updates
 };
 
 }  // namespace stackchan

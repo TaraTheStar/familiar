@@ -15,8 +15,8 @@ class Poolable {
 public:
     virtual ~Poolable() = default;
 
-    // 标记对象需要销毁。
-    // 通常由对象自身调用（例如，在其 Update 方法内部）。
+    // Mark the object for destruction.
+    // Typically called by the object itself (e.g., inside its Update method).
     void requestDestroy()
     {
         _destroy_requested = true;
@@ -32,8 +32,9 @@ private:
 };
 
 /**
- * @brief 通用对象池
- * 适用于不在乎最大容量，更关注对象自身生命周期管理的场景。
+ * @brief Generic object pool
+ * Suited to scenarios that do not care about a maximum capacity and instead
+ * focus on managing each object's own lifecycle.
  *
  * @tparam T
  */
@@ -41,15 +42,15 @@ template <typename T>
 class ObjectPool {
 public:
     /**
-     * @brief 创建一个新对象并返回其 ID。
-     * 使用空闲列表策略实现 O(1) 插入。
+     * @brief Create a new object and return its ID.
+     * Uses a free-list strategy to achieve O(1) insertion.
      *
-     * @param obj 对象实例的唯一指针
-     * @return int 分配的对象 ID (索引)
+     * @param obj Unique pointer to the object instance
+     * @return int Allocated object ID (index)
      */
     int create(std::unique_ptr<T> obj)
     {
-        // 1. 如果有空闲槽位，重用它
+        // 1. If a free slot is available, reuse it
         if (!_free_indices.empty()) {
             int id = _free_indices.back();
             _free_indices.pop_back();
@@ -57,16 +58,16 @@ public:
             return id;
         }
 
-        // 2. 没有空闲槽位，追加到末尾
+        // 2. No free slot, append to the end
         _objs.push_back(std::move(obj));
         return (int)_objs.size() - 1;
     }
 
     /**
-     * @brief 通过 ID 获取对象实例。
+     * @brief Get an object instance by ID.
      *
-     * @param id 对象 ID
-     * @return T* 对象指针，如果无效或为空则返回 nullptr
+     * @param id Object ID
+     * @return T* Object pointer, or nullptr if invalid or empty
      */
     T* get(int id)
     {
@@ -77,9 +78,9 @@ public:
     }
 
     /**
-     * @brief 遍历所有活跃对象。
+     * @brief Iterate over all active objects.
      *
-     * @param func 接收 (Object*, ID) 的回调函数
+     * @param func Callback receiving (Object*, ID)
      */
     void forEach(const std::function<void(T*, int)>& func)
     {
@@ -91,14 +92,14 @@ public:
     }
 
     /**
-     * @brief Poolable 的主要适配方法：
-     * 检查所有对象，看它们是否请求了销毁。
-     * 应该每帧调用一次（例如，在游戏循环结束时）。
+     * @brief Main adapter method for Poolable:
+     * Checks every object to see whether it has requested destruction.
+     * Should be called once per frame (e.g., at the end of the game loop).
      */
     void cleanup()
     {
         for (int i = 0; i < (int)_objs.size(); ++i) {
-            // 如果对象存在且请求了销毁
+            // If the object exists and has requested destruction
             if (_objs[i] && _objs[i]->isDestroyRequested()) {
                 destroy(i);
             }
@@ -106,10 +107,10 @@ public:
     }
 
     /**
-     * @brief 通过 ID 销毁对象并释放槽位。
+     * @brief Destroy an object by ID and free its slot.
      *
-     * @param id 对象 ID
-     * @return true 如果成功销毁，false 如果无效或已经为空
+     * @param id Object ID
+     * @return true if destroyed successfully, false if invalid or already empty
      */
     bool destroy(int id)
     {
@@ -117,22 +118,22 @@ public:
             return false;
         }
 
-        // 防止重复释放
+        // Prevent double free
         if (!_objs[id]) {
             return false;
         }
 
-        // 释放内存
+        // Release memory
         _objs[id].reset();
 
-        // 将此 ID 添加到空闲列表以便立即重用
+        // Add this ID to the free list for immediate reuse
         _free_indices.push_back(id);
 
         return true;
     }
 
     /**
-     * @brief 清除所有对象并重置池。
+     * @brief Clear all objects and reset the pool.
      */
     void clear()
     {
@@ -141,8 +142,8 @@ public:
     }
 
     /**
-     * @brief 获取总容量（最大索引 + 1）。
-     * 注意：这包括空槽位（空洞）。
+     * @brief Get the total capacity (max index + 1).
+     * Note: this includes empty slots (holes).
      *
      * @return size_t
      */
@@ -152,7 +153,7 @@ public:
     }
 
     /**
-     * @brief 获取实际活跃对象的数量。
+     * @brief Get the actual number of active objects.
      *
      * @return size_t
      */
@@ -167,9 +168,9 @@ private:
 };
 
 /**
- * @brief 环形对象池
- * 适用于大量对象并限定数量的场景（定长）。
- * 当池满时，新对象会自动覆盖最旧的对象。
+ * @brief Ring object pool
+ * Suited to scenarios with many objects and a fixed count (fixed length).
+ * When the pool is full, new objects automatically overwrite the oldest ones.
  *
  * @tparam T
  */
@@ -178,41 +179,44 @@ class RingObjectPool {
 public:
     /**
      * @brief
-     * @param capacity 池子的最大容量
+     * @param capacity Maximum capacity of the pool
      */
     explicit RingObjectPool(size_t capacity) : _capacity(capacity), _cursor(0)
     {
-        // 预先分配好所有槽位，全是 nullptr
+        // Pre-allocate all slots, all initialized to nullptr
         _objs.resize(capacity);
     }
 
     /**
-     * @brief 创建/生成一个新对象。
-     * 如果当前槽位已有对象，该旧对象会被立即析构（覆盖）。
+     * @brief Create/spawn a new object.
+     * If the current slot already holds an object, that old object is
+     * destructed immediately (overwritten).
      *
-     * @param obj 新对象的唯一指针
-     * @return int 分配的 ID (索引)
+     * @param obj Unique pointer to the new object
+     * @return int Allocated ID (index)
      */
     int create(std::unique_ptr<T> obj)
     {
         int id = _cursor;
 
-        // 如果该位置已有对象，unique_ptr 的赋值操作会自动析构旧对象
-        // 这一步实现了 "自动顶替最旧数据"
+        // If this slot already holds an object, the unique_ptr assignment
+        // automatically destructs the old object.
+        // This step implements "automatically replace the oldest data".
         _objs[id] = std::move(obj);
 
-        // 移动游标，如果超过容量则回到 0
+        // Advance the cursor, wrapping back to 0 when it exceeds capacity
         _cursor = (_cursor + 1) % _capacity;
 
         return id;
     }
 
     /**
-     * @brief 通过 ID 获取对象
-     * 注意：在环形池中，如果你持有 ID 太久，该 ID 对应的内容可能已经被新对象覆盖。
+     * @brief Get an object by ID
+     * Note: in a ring pool, if you hold an ID for too long, the content at that
+     * ID may already have been overwritten by a newer object.
      *
-     * @param id 对象索引
-     * @return T* 对象指针，如果是空槽位则返回 nullptr
+     * @param id Object index
+     * @return T* Object pointer, or nullptr if the slot is empty
      */
     T* get(int id)
     {
@@ -223,8 +227,8 @@ public:
     }
 
     /**
-     * @brief 遍历所有活跃的对象
-     * 会自动跳过空槽位 (nullptr)
+     * @brief Iterate over all active objects
+     * Automatically skips empty slots (nullptr)
      */
     void forEach(const std::function<void(T*, int)>& func)
     {
@@ -236,21 +240,22 @@ public:
     }
 
     /**
-     * @brief 清理主动请求销毁的对象。
-     * 针对那些还没轮到被覆盖，但逻辑上已经结束的对象（比如血量归零的敌人）。
+     * @brief Clean up objects that have actively requested destruction.
+     * Targets objects that are not yet due to be overwritten but are logically
+     * finished (e.g., an enemy whose health has reached zero).
      */
     void cleanup()
     {
         for (auto& ptr : _objs) {
-            // 如果对象存在，且请求了销毁
+            // If the object exists and has requested destruction
             if (ptr && ptr->isDestroyRequested()) {
-                ptr.reset();  // 释放内存，变为空槽位 (nullptr)
+                ptr.reset();  // Release memory, becomes an empty slot (nullptr)
             }
         }
     }
 
     /**
-     * @brief 获取总容量
+     * @brief Get the total capacity
      */
     size_t capacity() const
     {
@@ -258,7 +263,7 @@ public:
     }
 
     /**
-     * @brief 获取当前实际存活的对象数量
+     * @brief Get the current number of actually alive objects
      */
     size_t activeCount() const
     {
@@ -270,20 +275,20 @@ public:
     }
 
     /**
-     * @brief 强制清空整个池子
+     * @brief Force-clear the entire pool
      */
     void clear()
     {
         for (auto& ptr : _objs) {
             ptr.reset();
         }
-        _cursor = 0;  // 重置游标
+        _cursor = 0;  // Reset the cursor
     }
 
 private:
     std::vector<std::unique_ptr<T>> _objs;
     size_t _capacity;
-    int _cursor;  // 当前写入位置的指针
+    int _cursor;  // Pointer to the current write position
 };
 
 }  // namespace stackchan

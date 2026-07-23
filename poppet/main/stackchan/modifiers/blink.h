@@ -18,22 +18,22 @@ namespace stackchan {
 class BlinkModifier : public Modifier {
 public:
     /**
-     * @param destroyAfterMs 持续多久后停止眨眼并销毁（0 为永久）
-     * @param openIntervalMs 睁眼持续时间
-     * @param closeIntervalMs 闭眼持续时间（瞬间）
+     * @param destroyAfterMs How long before blinking stops and the modifier is destroyed (0 = forever)
+     * @param openIntervalMs Duration the eyes stay open
+     * @param closeIntervalMs Duration the eyes stay closed (momentary)
      */
     BlinkModifier(uint32_t destroyAfterMs = 0, uint32_t openIntervalMs = 5200, uint32_t closeIntervalMs = 200)
         : _open_interval_ms(openIntervalMs), _close_interval_ms(closeIntervalMs)
     {
         uint32_t now = GetHAL().millis();
 
-        // 处理销毁计时
+        // Handle destroy timing
         if (destroyAfterMs > 0) {
             _destroy_at   = now + destroyAfterMs;
             _has_lifetime = true;
         }
 
-        // 初始化：从睁眼状态开始，立即准备闭眼
+        // Initialize: start from the open state, ready to close
         _state           = State::OPEN;
         _next_state_tick = now + _open_interval_ms;
     }
@@ -51,9 +51,9 @@ public:
 
         uint32_t now = GetHAL().millis();
 
-        // 1. 处理销毁逻辑
+        // 1. Handle destroy logic
         if (_has_lifetime && now >= _destroy_at) {
-            // 销毁前确保眼睛是睁开的
+            // Make sure the eyes are open before destroying
             if (_state == State::CLOSED) {
                 apply_eye_weights(stackchan, _left_eye_weight, _right_eye_weight);
             }
@@ -61,30 +61,30 @@ public:
             return;
         }
 
-        // 2. 处理权重同步请求
-        // 如果眼睛正闭着，我们只记录权重，等睁眼时再应用
+        // 2. Handle weight resync requests
+        // If the eyes are currently closed, we just record the weights and apply them when they open
         if (_needs_resync) {
             _needs_resync     = false;
             _left_eye_weight  = stackchan.avatar().leftEye().getWeight();
             _right_eye_weight = stackchan.avatar().rightEye().getWeight();
         }
 
-        // 3. 状态机切换逻辑
+        // 3. State machine transition logic
         if (now >= _next_state_tick) {
             if (_state == State::OPEN) {
-                // 睁眼 -> 闭眼
+                // Open -> Closed
                 _state           = State::CLOSED;
                 _next_state_tick = now + _close_interval_ms;
 
-                // 闭眼瞬间，先备份当前权重（以防外部中途修改了权重）
+                // At the moment of closing, back up the current weights (in case they were modified externally)
                 _left_eye_weight  = stackchan.avatar().leftEye().getWeight();
                 _right_eye_weight = stackchan.avatar().rightEye().getWeight();
 
                 apply_eye_weights(stackchan, 25, 25);
             } else {
-                // 闭眼 -> 睁眼
+                // Closed -> Open
                 _state = State::OPEN;
-                // 睁眼时间可以加一点随机抖动，看起来更自然
+                // Add a little random jitter to the open time so it looks more natural
                 uint32_t jitter  = Random::getInstance().getInt(0, 500);
                 _next_state_tick = now + _open_interval_ms + jitter;
 

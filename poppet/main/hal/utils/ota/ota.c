@@ -96,7 +96,7 @@ esp_err_t my_esp_https_ota(const esp_https_ota_config_t *ota_config, void (*on_p
             break;
         }
 
-        // --- 进度计算逻辑 ---
+        // --- Progress calculation logic ---
         int total_size = esp_https_ota_get_image_size(https_ota_handle);
         int read_size  = esp_https_ota_get_image_len_read(https_ota_handle);
 

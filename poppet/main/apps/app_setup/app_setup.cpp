@@ -17,12 +17,12 @@ using namespace setup_workers;
 
 AppSetup::AppSetup()
 {
-    // 配置 App 名
+    // Configure App name
     setAppInfo().name = "SETUP";
-    // 配置 App 图标
+    // Configure App icon
     static auto icon  = assets::get_image("icon_setup.bin");
     setAppInfo().icon = (void*)&icon;
-    // 配置 App 主题颜色
+    // Configure App theme color
     static uint32_t theme_color = 0xB3B3B3;
     setAppInfo().userData       = (void*)&theme_color;
 }

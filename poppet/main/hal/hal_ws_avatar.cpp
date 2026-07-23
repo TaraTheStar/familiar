@@ -106,13 +106,13 @@ public:
     {
         auto token = secret_logic::generate_auth_token();
 
-        // 销毁旧实例，确保状态复位
+        // Destroy the old instance to ensure state is reset
         _websocket.reset();
 
         auto& board  = Board::GetInstance();
         auto network = board.GetNetwork();
 
-        // 创建 WebSocket 实例
+        // Create the WebSocket instance
         _websocket = network->CreateWebSocket(1);
 
         if (!_websocket) {
@@ -120,10 +120,10 @@ public:
             return;
         }
 
-        // 设置认证头
+        // Set the authentication header
         _websocket->SetHeader("Authorization", token.c_str());
 
-        // 设置回调
+        // Set the callbacks
         _websocket->OnConnected([this]() {
             ESP_LOGI(_tag.c_str(), "Connected to server!");
             // GetHAL().onWsLog.emit(CommonLogLevel::Info, "Server connected");
@@ -423,7 +423,7 @@ public:
             uint8_t* jpeg_data = nullptr;
             size_t jpeg_len    = 0;
 
-            // 压缩为 JPEG
+            // Compress to JPEG
             _time_count = esp_timer_get_time();
             if (image_to_jpeg((uint8_t*)frameData, frameSize, width, height, (v4l2_pix_fmt_t)format, 20, &jpeg_data,
                               &jpeg_len)) {

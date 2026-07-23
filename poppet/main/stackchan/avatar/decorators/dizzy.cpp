@@ -52,7 +52,7 @@ DizzyDecorator::DizzyDecorator(lv_obj_t* parent, uint32_t destroyAfterMs, uint32
         _next_animation_tick = now + _animation_interval_ms;
     }
 
-    _animation_index = 0;  // 用作当前旋转角度
+    _animation_index = 0;  // Used as the current rotation angle
 }
 
 DizzyDecorator::~DizzyDecorator()
@@ -71,7 +71,7 @@ void DizzyDecorator::_update()
     if (_animation_interval_ms > 0 && now >= _next_animation_tick) {
         _next_animation_tick = now + _animation_interval_ms;
 
-        // 自加30度 (300 unit)
+        // Increment by 30 degrees (300 units)
         _animation_index = (_animation_index + 300) % 3600;
         int rotation     = -_animation_index;
 
@@ -96,8 +96,8 @@ void DizzyDecorator::setPosition(int x, int y)
 
 void DizzyDecorator::setRotation(int rotation)
 {
-    // 这里要注意，手动设置的 rotation 可能会被 update 中的动画覆盖
-    // 但按照 HeartDecorator 的逻辑，setRotation 也是直接设置的
+    // Note: a manually set rotation may be overwritten by the animation in update()
+    // But following the HeartDecorator logic, setRotation also sets it directly
     if (_left) {
         _left->setRotation(rotation);
     }

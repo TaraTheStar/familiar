@@ -71,7 +71,7 @@ public:
 
     void set_angle_impl(int angle) override
     {
-        int mapped_angle = _zero_pos + angle * 16 / 5 / 10;  // 一步对应 0.3125度, 0.3125 = 5/16
+        int mapped_angle = _zero_pos + angle * 16 / 5 / 10;  // One step equals 0.3125 degrees, 0.3125 = 5/16
         mapped_angle     = uitk::clamp(mapped_angle, _config.rawPosLimit.x, _config.rawPosLimit.y);
 
         // mclog::tagInfo(_tag, "id: {} mapped angle: {}", _id, mapped_angle);

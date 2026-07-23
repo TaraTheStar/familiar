@@ -233,11 +233,11 @@ static void bleprph_advertise(void)
     struct ble_hs_adv_fields rsp_fields;
     int rc;
 
-    // 获取MAC地址
+    // Get the MAC address
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_EFUSE_FACTORY);
 
-    // 厂商数据
+    // Manufacturer data
     // uint8_t mfg_data[10];
     uint8_t mfg_data[8];
     memset(mfg_data, 0, sizeof(mfg_data));
@@ -248,12 +248,12 @@ static void bleprph_advertise(void)
     // mfg_data[8] = 0x01;
     // mfg_data[9] = 0x10;
 
-    // ========== 广播包：只放必要信息 ==========
+    // ========== Advertising packet: only essential information ==========
     memset(&fields, 0, sizeof fields);
 
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
-    // 只放UUID
+    // Only include the UUID
     // fields.uuids16             = (ble_uuid16_t[]){BLE_UUID16_INIT(GATT_SVR_SVC_ALERT_UUID)};
     // fields.num_uuids16         = 1;
     // fields.uuids16_is_complete = 1;
@@ -276,7 +276,7 @@ static void bleprph_advertise(void)
         return;
     }
 
-    // ========== 扫描响应包：放详细信息 ==========
+    // ========== Scan response packet: detailed information ==========
     memset(&rsp_fields, 0, sizeof rsp_fields);
 
 #if CONFIG_BT_NIMBLE_GAP_SERVICE
@@ -286,11 +286,11 @@ static void bleprph_advertise(void)
     rsp_fields.name_is_complete = 1;
 #endif
 
-    // TX Power放在扫描响应
+    // TX Power goes in the scan response
     rsp_fields.tx_pwr_lvl_is_present = 1;
     rsp_fields.tx_pwr_lvl            = BLE_HS_ADV_TX_PWR_LVL_AUTO;
 
-    // 厂商数据放在扫描响应
+    // Manufacturer data goes in the scan response
     rsp_fields.mfg_data     = mfg_data;
     rsp_fields.mfg_data_len = sizeof(mfg_data);
 
@@ -300,7 +300,7 @@ static void bleprph_advertise(void)
         return;
     }
 
-    // 启动广播
+    // Start advertising
     memset(&adv_params, 0, sizeof adv_params);
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;

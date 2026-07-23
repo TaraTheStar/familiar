@@ -426,10 +426,10 @@ bool Assets::LvglStrategy::Apply(Assets* assets) {
 bool Assets::Download(std::string url, std::function<void(int progress, size_t speed)> progress_callback) {
     ESP_LOGI(TAG, "Downloading new version of assets from %s", url.c_str());
 
-    // 取消当前资源分区的内存映射
+    // Unmap the current assets partition from memory
     UnApplyPartition();
 
-    // 下载新的资源文件
+    // Download the new assets file
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(0);
     
@@ -454,17 +454,17 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
         return false;
     }
 
-    // 定义扇区大小为4KB（ESP32的标准扇区大小）
+    // Sector size is 4KB (the standard ESP32 sector size)
     const size_t SECTOR_SIZE = esp_partition_get_main_flash_sector_size();
     
-    // 计算需要擦除的扇区数量
-    size_t sectors_to_erase = (content_length + SECTOR_SIZE - 1) / SECTOR_SIZE; // 向上取整
+    // Compute the number of sectors to erase
+    size_t sectors_to_erase = (content_length + SECTOR_SIZE - 1) / SECTOR_SIZE; // round up
     size_t total_erase_size = sectors_to_erase * SECTOR_SIZE;
     
     ESP_LOGI(TAG, "Sector size: %u, content length: %u, sectors to erase: %u, total erase size: %u", 
              SECTOR_SIZE, content_length, sectors_to_erase, total_erase_size);
     
-    // 写入新的资源文件到分区，一边erase一边写入
+    // Write the new assets file to the partition, erasing and writing as we go
     char* buffer = (char*)heap_caps_malloc(SECTOR_SIZE, MALLOC_CAP_INTERNAL);
     if (buffer == nullptr) {
         ESP_LOGE(TAG, "Failed to allocate buffer");
@@ -487,16 +487,16 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
             break;
         }
 
-        // 检查是否需要擦除新的扇区
+        // Check whether new sectors need to be erased
         size_t write_end_offset = total_written + ret;
         size_t needed_sectors = (write_end_offset + SECTOR_SIZE - 1) / SECTOR_SIZE;
         
-        // 擦除需要的新扇区
+        // Erase the newly needed sectors
         while (current_sector < needed_sectors) {
             size_t sector_start = current_sector * SECTOR_SIZE;
             size_t sector_end = (current_sector + 1) * SECTOR_SIZE;
             
-            // 确保擦除范围不超过分区大小
+            // Ensure the erase range does not exceed the partition size
             if (sector_end > partition_->size) {
                 ESP_LOGE(TAG, "Sector end (%u) exceeds partition size (%lu)", sector_end, partition_->size);
                 heap_caps_free(buffer);
@@ -514,7 +514,7 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
             current_sector++;
         }
 
-        // 写入数据到分区
+        // Write the data to the partition
         esp_err_t err = esp_partition_write(partition_, total_written, buffer, ret);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to write to assets partition at offset %u: %s", total_written, esp_err_to_name(err));
@@ -525,17 +525,17 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
         total_written += ret;
         recent_written += ret;
 
-        // 计算进度和速度
+        // Compute progress and speed
         if (esp_timer_get_time() - last_calc_time >= 1000000 || total_written == content_length || ret == 0) {
             size_t progress = total_written * 100 / content_length;
-            size_t speed = recent_written; // 每秒的字节数
+            size_t speed = recent_written; // bytes per second
             ESP_LOGI(TAG, "Progress: %u%% (%u/%u), Speed: %u B/s, Sectors erased: %u", 
                      progress, total_written, content_length, speed, current_sector);
             if (progress_callback) {
                 progress_callback(progress, speed);
             }
             last_calc_time = esp_timer_get_time();
-            recent_written = 0; // 重置最近写入的字节数
+            recent_written = 0; // Reset the recently-written byte count
         }
     }
     
@@ -550,7 +550,7 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
     ESP_LOGI(TAG, "Assets download completed, total written: %u bytes, total sectors erased: %u", 
              total_written, current_sector);
 
-    // 重新初始化资源分区
+    // Re-initialize the assets partition
     if (!InitializePartition()) {
         ESP_LOGE(TAG, "Failed to re-initialize assets partition");
         return false;

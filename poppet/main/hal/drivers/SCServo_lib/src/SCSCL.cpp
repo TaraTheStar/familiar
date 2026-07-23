@@ -100,9 +100,9 @@ int SCSCL::WritePWM(u8 ID, s16 pwmOut)
 }
 
 /**
- * Switch between position mode and PWM mode 切换位置模式和PWM模式
+ * Switch between position mode and PWM mode
  * ID: Servo ID
- * mode: 0 for position mode, 1 for PWM mode 0表示位置模式，1表示PWM模式
+ * mode: 0 for position mode, 1 for PWM mode
  * Return: Result of the operation
  */
 int SCSCL::SwitchMode(int ID, uint8_t mode)
@@ -136,9 +136,9 @@ int SCSCL::SwitchMode(int ID, uint8_t mode)
 }
 
 /**
- * Enable or disable torque 扭矩开关
+ * Enable or disable torque
  * ID: Servo ID
- * Enable: 1 to enable, 0 to disable 2 to damping  1表示使能，0表示关闭，2表示阻尼
+ * Enable: 1 to enable, 0 to disable, 2 to damping
  * Return: Result of the operation
  */
 int SCSCL::EnableTorque(u8 ID, u8 Enable)

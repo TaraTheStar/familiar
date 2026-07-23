@@ -105,14 +105,14 @@ void Motion::lookAtNormalized(float x, float y, int speed, const char* tag)
 
 void Motion::lookAtPoint(float x, float y, float z, int speed, const char* tag)
 {
-    // Yaw: 绕 Z 轴旋转。使用 atan2(y, x)
+    // Yaw: rotation around the Z axis. Use atan2(y, x)
     float yaw_rad = std::atan2(y, x);
 
-    // Pitch: 俯仰。使用 atan2(z, sqrt(x*x + y*y))
+    // Pitch: elevation. Use atan2(z, sqrt(x*x + y*y))
     float ground_dist = std::sqrt(x * x + y * y);
     float pitch_rad   = std::atan2(z, ground_dist);
 
-    // 将弧度转换为你的舵机单位 (-1280~1280 等)
+    // Convert radians to servo units (e.g. -1280~1280)
     int yaw_angle   = static_cast<int>(to_degrees(yaw_rad) * 10);
     int pitch_angle = static_cast<int>(to_degrees(pitch_rad) * 10);
 

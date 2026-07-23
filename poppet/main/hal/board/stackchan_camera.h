@@ -78,7 +78,7 @@ public:
     virtual bool Capture() override;
     bool StreamCaptures();
 
-    // 翻转控制函数
+    // Flip control functions
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;
     virtual std::string Explain(const std::string& question);

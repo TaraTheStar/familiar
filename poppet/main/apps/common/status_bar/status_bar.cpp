@@ -37,8 +37,8 @@ public:
         _is_tracking    = false;
         _last_state     = LV_INDEV_STATE_REL;
         _screen_height  = 240;
-        _top_threshold  = 20;  // 距离顶部 20 像素内触发
-        _swipe_min_dist = 50;  // 向下滑动至少 50 像素才触发
+        _top_threshold  = 20;  // Triggers within 20 pixels of the top
+        _swipe_min_dist = 50;  // Requires at least a 50-pixel downward swipe to trigger
     }
 
     void update()
@@ -52,38 +52,38 @@ public:
         lv_point_t curr_point;
         lv_indev_get_point(indev, &curr_point);
 
-        // 1. 按下瞬间 (Transition: Released -> Pressed)
+        // 1. Press moment (Transition: Released -> Pressed)
         if (state == LV_INDEV_STATE_PR && _last_state == LV_INDEV_STATE_REL) {
-            // 只有在按下那一刻就在顶部，才标记为追踪开始
+            // Only mark tracking as started if the press begins at the top
             if (curr_point.y <= _top_threshold && curr_point.y >= 0) {
                 _start_point = curr_point;
                 _is_tracking = true;
             } else {
-                _is_tracking = false;  // 按下位置不对，此次滑动全程忽略
+                _is_tracking = false;  // Wrong press location; ignore this swipe entirely
             }
         }
-        // 2. 抬起瞬间 (Transition: Pressed -> Released)
+        // 2. Release moment (Transition: Pressed -> Released)
         else if (state == LV_INDEV_STATE_REL && _last_state == LV_INDEV_STATE_PR) {
             if (_is_tracking) {
-                int delta_y = curr_point.y - _start_point.y;  // 向下滑为正
+                int delta_y = curr_point.y - _start_point.y;  // Downward swipe is positive
                 int delta_x = abs(curr_point.x - _start_point.x);
 
-                // 判断标准：向下位移足够，且角度偏垂直
+                // Criteria: sufficient downward displacement and a mostly vertical angle
                 if (delta_y > _swipe_min_dist && delta_y > delta_x) {
                     if (onGesture) {
                         onGesture();
                     }
                 }
-                _is_tracking = false;  // 重置追踪状态
+                _is_tracking = false;  // Reset tracking state
             }
         }
 
-        _last_state = state;  // 更新状态机
+        _last_state = state;  // Update the state machine
     }
 
 private:
     bool _is_tracking;
-    lv_indev_state_t _last_state;  // 记录上一帧的状态
+    lv_indev_state_t _last_state;  // Records the state from the previous frame
     lv_point_t _start_point;
     int _screen_height;
     int _top_threshold;

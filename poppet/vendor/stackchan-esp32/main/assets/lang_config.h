@@ -5,14 +5,14 @@
 #include <string_view>
 
 #ifndef en_us
-    #define en_us  // 預設語言
+    #define en_us  // Default language
 #endif
 
 namespace Lang {
-    // 语言元数据
+    // Language metadata
     constexpr const char* CODE = "en-US";
 
-    // 字符串资源 (en-US as fallback for missing keys)
+    // String resources (en-US as fallback for missing keys)
     namespace Strings {
         constexpr const char* ACCESS_VIA_BROWSER = " Config URL: ";
         constexpr const char* ACTIVATION = "Activation";
@@ -68,7 +68,7 @@ namespace Lang {
         constexpr const char* WIFI_CONFIG_MODE = "Wi-Fi Configuration Mode";
     }
 
-    // 音效资源 (en-US as fallback for missing audio files)
+    // Sound resources (en-US as fallback for missing audio files)
     namespace Sounds {
 
         extern const char ogg_0_start[] asm("_binary_0_ogg_start");
