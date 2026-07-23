@@ -39,6 +39,18 @@ flashes. Removed:
   via `CONFIG_LANGUAGE_*` (`en-US`); CMake globs only the selected `LANG_DIR`.
 - **`build/`, the vendored-tree `.git/`, `docs/`, `.github/`, and the non-English
   `README_*.md`** — not consumed by the build.
+- **The marketing `README.md` and upstream-only `scripts/` tooling.** The build
+  invokes only `scripts/gen_lang.py` and `scripts/build_default_assets.py` (from
+  CMake). Removed as unreferenced holdovers: `release.py`, `versions.py`,
+  `download_github_runs.py` (xiaozhi CI/release automation); `ogg_converter/` and
+  `p3_tools/` (this firmware plays OGG/Opus, not P3); `Image_Converter/` (a
+  standalone LVGL image GUI); and `spiffs_assets/` (superseded — its
+  `pack_model` / `build` / `spiffs_assets_gen` logic was inlined into
+  `build_default_assets.py`). The upstream `README.md` was xiaozhi marketing
+  whose every link pointed at already-pruned files. Kept dev tooling for live
+  features: `audio_debug_server.py`, and the acoustic Wi-Fi provisioning
+  (`sonic_wifi_config.html` + `acoustic_check/`, which drive the compiled-in
+  AFSK demodulator).
 
 Kept (needed by the build): `main/` sources, `main/boards/common/`,
 `main/assets/{common,locales/en-US}` + `lang_config.h`, `scripts/` (asset/lang
