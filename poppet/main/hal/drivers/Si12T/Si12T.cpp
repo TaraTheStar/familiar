@@ -8,17 +8,17 @@ static const char *TAG = "Si12T";
 #define I2C_TIMEOUT_MS 100
 
 /**
- * @brief Si12T设备结构体
+ * @brief Si12T device struct
  */
 struct si12t_dev_t {
-    i2c_master_dev_handle_t i2c_dev; /*!< I2C设备句柄 */
-    uint8_t dev_addr;                /*!< 设备地址 */
+    i2c_master_dev_handle_t i2c_dev; /*!< I2C device handle */
+    uint8_t dev_addr;                /*!< Device address */
 };
 
 uint8_t si12t_point_type[3] = {SI12T_OUTPUT_NONE, SI12T_OUTPUT_NONE, SI12T_OUTPUT_NONE};
 
 /**
- * @brief 写寄存器
+ * @brief Write register
  */
 static esp_err_t si12t_i2c_write_reg(si12t_handle_t handle, uint8_t reg_addr, uint8_t value)
 {
@@ -27,7 +27,7 @@ static esp_err_t si12t_i2c_write_reg(si12t_handle_t handle, uint8_t reg_addr, ui
 }
 
 /**
- * @brief 读寄存器
+ * @brief Read register
  */
 static esp_err_t si12t_i2c_read_reg(si12t_handle_t handle, uint8_t reg_addr, uint8_t *value)
 {
@@ -37,7 +37,7 @@ static esp_err_t si12t_i2c_read_reg(si12t_handle_t handle, uint8_t reg_addr, uin
 }
 
 /**
- * @brief 设置所有灵敏度寄存器
+ * @brief Set all sensitivity registers
  */
 static esp_err_t si12t_set_sens(si12t_handle_t handle, uint8_t value)
 {

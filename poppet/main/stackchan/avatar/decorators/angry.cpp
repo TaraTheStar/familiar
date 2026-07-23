@@ -20,29 +20,29 @@ LV_IMAGE_DECLARE(decorator_angry);
 AngryDecorator::AngryDecorator(lv_obj_t* parent, uint32_t destroyAfterMs, uint32_t animationIntervalMs)
     : _animation_interval_ms(animationIntervalMs)
 {
-    // 初始化 UI 组件
+    // Initialize the UI component
     _angry = std::make_unique<Image>(parent);
     _angry->setSrc(&decorator_angry);
     _angry->setAlign(LV_ALIGN_CENTER);
     _angry->setPos(_angry_default_position.x, _angry_default_position.y);
 
-    // 设置旋转中心和初始角度
+    // Set the rotation pivot and initial angle
     _angry->setTransformPivot(_angry->getWidth() / 2, _angry->getHeight() / 2);
     _angry->setRotation(_angry_rotation_frames[0]);
 
-    // 设置颜色偏置
+    // Set the color recolor
     _angry->setImageRecolorOpa(LV_OPA_COVER);
     _angry->setImageRecolor(_angry_default_color);
 
     uint32_t now = GetHAL().millis();
 
-    // 初始化销毁倒计时
+    // Initialize the destroy countdown
     if (destroyAfterMs > 0) {
         _destroy_at   = now + destroyAfterMs;
         _has_lifetime = true;
     }
 
-    // 初始化动画倒计时
+    // Initialize the animation countdown
     if (_animation_interval_ms > 0) {
         _next_animation_tick = now + _animation_interval_ms;
     }
@@ -56,17 +56,17 @@ void AngryDecorator::_update()
 {
     uint32_t now = GetHAL().millis();
 
-    // 检查自动销毁
+    // Check for auto-destroy
     if (_has_lifetime && now >= _destroy_at) {
         requestDestroy();
         return;
     }
 
-    // 检查动画跳变
+    // Check for animation frame change
     if (_animation_interval_ms > 0 && now >= _next_animation_tick) {
         _next_animation_tick = now + _animation_interval_ms;
 
-        // 切换帧
+        // Switch frame
         _animation_index = (_animation_index + 1) % _angry_rotation_frames.size();
         _angry->setRotation(_angry_rotation_frames[_animation_index]);
     }

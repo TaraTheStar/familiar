@@ -16,12 +16,12 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget,
                              QHBoxLayout, QLineEdit, QPushButton, QLabel, QTextEdit)
 from PyQt6.QtCore import QTimer
 
-# 导入解码器
+# Import the decoder
 from demod import RealTimeAFSKDecoder
 
 
 class UDPServerProtocol(asyncio.DatagramProtocol):
-    """UDP服务器协议类"""
+    """UDP server protocol class"""
     def __init__(self, data_queue):
         self.client_address = None
         self.data_queue: deque = data_queue
@@ -30,57 +30,57 @@ class UDPServerProtocol(asyncio.DatagramProtocol):
         self.transport = transport
         
     def datagram_received(self, data, addr):
-        # 如果还没有客户端地址，记录第一个连接的客户端
+        # If there is no client address yet, record the first client that connects
         if self.client_address is None:
             self.client_address = addr
-            print(f"接受来自 {addr} 的连接")
-        
-        # 只处理来自已记录客户端的数据
+            print(f"Accepted connection from {addr}")
+
+        # Only process data from the recorded client
         if addr == self.client_address:
-            # 将接收到的音频数据添加到队列
+            # Add the received audio data to the queue
             self.data_queue.extend(data)
         else:
-            print(f"忽略来自未知地址 {addr} 的数据")
+            print(f"Ignoring data from unknown address {addr}")
 
 
 class MatplotlibWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # 创建 Matplotlib 的 Figure 对象
+        # Create the Matplotlib Figure object
         self.figure = Figure()
 
-        # 创建 FigureCanvas 对象，它是 Figure 的 QWidget 容器
+        # Create the FigureCanvas object, which is the QWidget container for the Figure
         self.canvas = FigureCanvas(self.figure)
 
-        # 创建 Matplotlib 的导航工具栏
+        # Create the Matplotlib navigation toolbar
         # self.toolbar = NavigationToolbar(self.canvas, self)
         self.toolbar = None
 
-        # 创建布局
+        # Create the layout
         layout = QVBoxLayout()
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas)
         self.setLayout(layout)
 
-        # 初始化音频数据参数
-        self.freq = 16000  # 采样频率
-        self.time_window = 20  # 显示时间窗口
-        self.wave_data = deque(maxlen=self.freq * self.time_window * 2) # 缓冲队列, 用于分发计算/绘图
-        self.signals = deque(maxlen=self.freq * self.time_window)  # 双端队列存储信号数据
+        # Initialize the audio data parameters
+        self.freq = 16000  # Sample rate
+        self.time_window = 20  # Display time window
+        self.wave_data = deque(maxlen=self.freq * self.time_window * 2) # Buffer queue, used to dispatch computation/plotting
+        self.signals = deque(maxlen=self.freq * self.time_window)  # Deque storing the signal data
 
-        # 创建包含两个子图的画布
+        # Create the canvas containing two subplots
         self.ax1 = self.figure.add_subplot(2, 1, 1)
         self.ax2 = self.figure.add_subplot(2, 1, 2)
-        
-        # 时域子图
+
+        # Time-domain subplot
         self.ax1.set_title('Real-time Audio Waveform')
         self.ax1.set_xlabel('Sample Index')
         self.ax1.set_ylabel('Amplitude')
         self.line_time, = self.ax1.plot([], [])
         self.ax1.grid(True, alpha=0.3)
         
-        # 频域子图
+        # Frequency-domain subplot
         self.ax2.set_title('Real-time Frequency Spectrum')
         self.ax2.set_xlabel('Frequency (Hz)')
         self.ax2.set_ylabel('Magnitude')
@@ -89,12 +89,12 @@ class MatplotlibWidget(QWidget):
         
         self.figure.tight_layout()
 
-        # 定时器用于更新图表
+        # Timer used to update the chart
         self.timer = QTimer(self)
-        self.timer.setInterval(100)  # 100毫秒更新一次
+        self.timer.setInterval(100)  # Update every 100 milliseconds
         self.timer.timeout.connect(self.update_plot)
-        
-        # 初始化AFSK解码器
+
+        # Initialize the AFSK decoder
         self.decoder = RealTimeAFSKDecoder(
             f_sample=self.freq,
             mark_freq=1800,
@@ -104,43 +104,43 @@ class MatplotlibWidget(QWidget):
             threshold=0.5
         )
         
-        # 解码结果回调
+        # Decoding result callback
         self.decode_callback = None
 
     def start_plotting(self):
-        """开始绘图"""
+        """Start plotting"""
         self.timer.start()
-        
+
     def stop_plotting(self):
-        """停止绘图"""
+        """Stop plotting"""
         self.timer.stop()
 
     def update_plot(self):
-        """更新绘图数据"""
+        """Update the plot data"""
         if len(self.wave_data) >= 2:
-            # 进行实时解码
-            # 获取最新的音频数据进行解码
+            # Perform real-time decoding
+            # Get the latest audio data for decoding
             even = len(self.wave_data) // 2 * 2
             print(f"length of wave_data: {len(self.wave_data)}")
             drained = [self.wave_data.popleft() for _ in range(even)]
             signal = np.frombuffer(bytearray(drained), dtype='<i2') / 32768
-            decoded_text_new = self.decoder.process_audio(signal) # 处理新增信号, 返回全量解码文本
+            decoded_text_new = self.decoder.process_audio(signal) # Process the new signal, return the full decoded text
             if decoded_text_new and self.decode_callback:
                 self.decode_callback(decoded_text_new)
-            self.signals.extend(signal.tolist())  # 将波形数据添加到绘图数据
+            self.signals.extend(signal.tolist())  # Add the waveform data to the plot data
 
         if len(self.signals) > 0:
-            # 只显示最近的一段数据，避免图表过于密集
+            # Only display the most recent segment of data to avoid an overly dense chart
             signal = np.array(self.signals)
             max_samples = min(len(signal), self.freq * self.time_window)
             if len(signal) > max_samples:
                 signal = signal[-max_samples:]
             
-            # 更新时域图
+            # Update the time-domain plot
             x = np.arange(len(signal))
             self.line_time.set_data(x, signal)
-            
-            # 自动调整时域坐标轴范围
+
+            # Automatically adjust the time-domain axis range
             if len(signal) > 0:
                 self.ax1.set_xlim(0, len(signal))
                 y_min, y_max = np.min(signal), np.max(signal)
@@ -150,23 +150,23 @@ class MatplotlibWidget(QWidget):
                 else:
                     self.ax1.set_ylim(-1, 1)
             
-            # 计算频谱（短时离散傅立叶变换）
+            # Compute the spectrum (short-time discrete Fourier transform)
             if len(signal) > 1:
-                # 计算FFT
+                # Compute the FFT
                 fft_signal = np.abs(np.fft.fft(signal))
                 frequencies = np.fft.fftfreq(len(signal), 1/self.freq)
-                
-                # 只取正频率部分
+
+                # Take only the positive-frequency part
                 positive_freq_idx = frequencies >= 0
                 freq_positive = frequencies[positive_freq_idx]
                 fft_positive = fft_signal[positive_freq_idx]
-                
-                # 更新频域图
+
+                # Update the frequency-domain plot
                 self.line_freq.set_data(freq_positive, fft_positive)
-                
-                # 自动调整频域坐标轴范围
+
+                # Automatically adjust the frequency-domain axis range
                 if len(fft_positive) > 0:
-                    # 限制频率显示范围到0-4000Hz，避免过于密集
+                    # Limit the frequency display range to 0-4000Hz to avoid excessive density
                     max_freq_show = min(4000, self.freq // 2)
                     freq_mask = freq_positive <= max_freq_show
                     if np.any(freq_mask):
@@ -188,81 +188,81 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Acoustic Check")
         self.setGeometry(100, 100, 1000, 800)
 
-        # 主窗口部件
+        # Main window widget
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        
-        # 主布局
+
+        # Main layout
         main_layout = QVBoxLayout(main_widget)
-        
-        # 绘图区域
+
+        # Plotting area
         self.matplotlib_widget = MatplotlibWidget()
         main_layout.addWidget(self.matplotlib_widget)
-        
-        # 控制面板
+
+        # Control panel
         control_panel = QWidget()
         control_layout = QHBoxLayout(control_panel)
-        
-        # 监听地址和端口输入
-        control_layout.addWidget(QLabel("监听地址:"))
+
+        # Listen address and port input
+        control_layout.addWidget(QLabel("Listen address:"))
         self.address_input = QLineEdit("0.0.0.0")
         self.address_input.setFixedWidth(120)
         control_layout.addWidget(self.address_input)
-        
-        control_layout.addWidget(QLabel("端口:"))
+
+        control_layout.addWidget(QLabel("Port:"))
         self.port_input = QLineEdit("8000")
         self.port_input.setFixedWidth(80)
         control_layout.addWidget(self.port_input)
-        
-        # 监听按钮
-        self.listen_button = QPushButton("开始监听")
+
+        # Listen button
+        self.listen_button = QPushButton("Start listening")
         self.listen_button.clicked.connect(self.toggle_listening)
         control_layout.addWidget(self.listen_button)
-        
-        # 状态标签
-        self.status_label = QLabel("状态: 未连接")
+
+        # Status label
+        self.status_label = QLabel("Status: Not connected")
         control_layout.addWidget(self.status_label)
-        
-        # 数据统计标签
-        self.data_label = QLabel("接收数据: 0 bytes")
+
+        # Data statistics label
+        self.data_label = QLabel("Received data: 0 bytes")
         control_layout.addWidget(self.data_label)
-        
-        # 保存按钮
-        self.save_button = QPushButton("保存音频")
+
+        # Save button
+        self.save_button = QPushButton("Save audio")
         self.save_button.clicked.connect(self.save_audio)
         self.save_button.setEnabled(False)
         control_layout.addWidget(self.save_button)
-        
-        control_layout.addStretch()  # 添加弹性空间
+
+        control_layout.addStretch()  # Add flexible space
         
         main_layout.addWidget(control_panel)
         
-        # 解码显示区域
+        # Decode display area
         decode_panel = QWidget()
         decode_layout = QVBoxLayout(decode_panel)
-        
-        # 解码标题
-        decode_title = QLabel("实时AFSK解码结果:")
+
+        # Decode title
+        decode_title = QLabel("Real-time AFSK decoding results:")
         decode_title.setStyleSheet("font-weight: bold; font-size: 14px;")
         decode_layout.addWidget(decode_title)
-        
-        # 解码文本显示
+
+        # Decoded text display
         self.decode_text = QTextEdit()
         self.decode_text.setMaximumHeight(150)
         self.decode_text.setReadOnly(True)
         self.decode_text.setStyleSheet("font-family: 'Courier New', monospace; font-size: 12px;")
         decode_layout.addWidget(self.decode_text)
         
-        # 解码控制按钮
+        # Decode control buttons
         decode_control_layout = QHBoxLayout()
-        
-        # 清空按钮
-        self.clear_decode_button = QPushButton("清空解码")
+
+        # Clear button
+        self.clear_decode_button = QPushButton("Clear decoding")
         self.clear_decode_button.clicked.connect(self.clear_decode_text)
         decode_control_layout.addWidget(self.clear_decode_button)
-        
-        # 解码统计标签
-        self.decode_stats_label = QLabel("解码统计: 0 bits, 0 chars")
+
+        # Decode statistics label
+        self.decode_stats_label = QLabel("Decode stats: 0 bits, 0 chars")
         decode_control_layout.addWidget(self.decode_stats_label)
         
         decode_control_layout.addStretch()
@@ -270,62 +270,62 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(decode_panel)
         
-        # 设置解码回调
+        # Set the decode callback
         self.matplotlib_widget.decode_callback = self.on_decode_text
-        
-        # UDP相关属性
+
+        # UDP-related attributes
         self.udp_transport = None
         self.is_listening = False
-        
-        # 数据统计定时器
+
+        # Data statistics timer
         self.stats_timer = QTimer(self)
-        self.stats_timer.setInterval(1000)  # 每秒更新一次统计
+        self.stats_timer.setInterval(1000)  # Update statistics once per second
         self.stats_timer.timeout.connect(self.update_stats)
-        
+
     def on_decode_text(self, new_text: str):
-        """解码文本回调"""
+        """Decoded text callback"""
         if new_text:
-            # 添加新解码的文本
+            # Append the newly decoded text
             current_text = self.decode_text.toPlainText()
             updated_text = current_text + new_text
 
-            # 限制文本长度，保留最新的1000个字符
+            # Limit the text length, keeping the most recent 1000 characters
             if len(updated_text) > 1000:
                 updated_text = updated_text[-1000:]
-            
+
             self.decode_text.setPlainText(updated_text)
-            
-            # 滚动到底部
+
+            # Scroll to the bottom
             cursor = self.decode_text.textCursor()
             cursor.movePosition(cursor.MoveOperation.End)
             self.decode_text.setTextCursor(cursor)
             
     def clear_decode_text(self):
-        """清空解码文本"""
+        """Clear the decoded text"""
         self.decode_text.clear()
         if hasattr(self.matplotlib_widget, 'decoder'):
             self.matplotlib_widget.decoder.clear()
-        self.decode_stats_label.setText("解码统计: 0 bits, 0 chars")
-        
+        self.decode_stats_label.setText("Decode stats: 0 bits, 0 chars")
+
     def update_decode_stats(self):
-        """更新解码统计"""
+        """Update the decode statistics"""
         if hasattr(self.matplotlib_widget, 'decoder'):
             stats = self.matplotlib_widget.decoder.get_stats()
             stats_text = (
-                f"前置: {stats['prelude_bits']} , 已接收{stats['total_chars']} chars, "
-                f"缓冲: {stats['buffer_bits']} bits, 状态: {stats['state']}"
+                f"Prelude: {stats['prelude_bits']} , received {stats['total_chars']} chars, "
+                f"buffer: {stats['buffer_bits']} bits, state: {stats['state']}"
             )
             self.decode_stats_label.setText(stats_text)
         
     def toggle_listening(self):
-        """切换监听状态"""
+        """Toggle the listening state"""
         if not self.is_listening:
             self.start_listening()
         else:
             self.stop_listening()
-            
+
     async def start_listening_async(self):
-        """异步启动UDP监听"""
+        """Start UDP listening asynchronously"""
         try:
             address = self.address_input.text().strip()
             port = int(self.port_input.text().strip())
@@ -336,109 +336,109 @@ class MainWindow(QMainWindow):
                 local_addr=(address, port)
             )
             
-            self.status_label.setText(f"状态: 监听中 ({address}:{port})")
-            print(f"UDP服务器启动, 监听 {address}:{port}")
-            
+            self.status_label.setText(f"Status: Listening ({address}:{port})")
+            print(f"UDP server started, listening on {address}:{port}")
+
         except Exception as e:
-            self.status_label.setText(f"状态: 启动失败 - {str(e)}")
-            print(f"UDP服务器启动失败: {e}")
+            self.status_label.setText(f"Status: Startup failed - {str(e)}")
+            print(f"UDP server startup failed: {e}")
             self.is_listening = False
-            self.listen_button.setText("开始监听")
+            self.listen_button.setText("Start listening")
             self.address_input.setEnabled(True)
             self.port_input.setEnabled(True)
-            
+
     def start_listening(self):
-        """开始监听"""
+        """Start listening"""
         try:
-            int(self.port_input.text().strip())  # 验证端口号格式
+            int(self.port_input.text().strip())  # Validate the port number format
         except ValueError:
-            self.status_label.setText("状态: 端口号必须是数字")
+            self.status_label.setText("Status: Port number must be a number")
             return
             
         self.is_listening = True
-        self.listen_button.setText("停止监听")
+        self.listen_button.setText("Stop listening")
         self.address_input.setEnabled(False)
         self.port_input.setEnabled(False)
         self.save_button.setEnabled(True)
-        
-        # 清空数据队列
+
+        # Clear the data queue
         self.matplotlib_widget.wave_data.clear()
-        
-        # 启动绘图和统计更新
+
+        # Start plotting and statistics updates
         self.matplotlib_widget.start_plotting()
         self.stats_timer.start()
-        
-        # 异步启动UDP服务器
+
+        # Start the UDP server asynchronously
         loop = asyncio.get_event_loop()
         loop.create_task(self.start_listening_async())
 
     def stop_listening(self):
-        """停止监听"""
+        """Stop listening"""
         self.is_listening = False
-        self.listen_button.setText("开始监听")
+        self.listen_button.setText("Start listening")
         self.address_input.setEnabled(True)
         self.port_input.setEnabled(True)
-        
-        # 停止UDP服务器
+
+        # Stop the UDP server
         if self.udp_transport:
             self.udp_transport.close()
             self.udp_transport = None
-            
-        # 停止绘图和统计更新
+
+        # Stop plotting and statistics updates
         self.matplotlib_widget.stop_plotting()
         self.matplotlib_widget.wave_data.clear()
         self.stats_timer.stop()
-        
-        self.status_label.setText("状态: 已停止")
-        
+
+        self.status_label.setText("Status: Stopped")
+
     def update_stats(self):
-        """更新数据统计"""
+        """Update the data statistics"""
         data_size = len(self.matplotlib_widget.signals)
-        self.data_label.setText(f"接收数据: {data_size} 采样")
-        
-        # 更新解码统计
+        self.data_label.setText(f"Received data: {data_size} samples")
+
+        # Update the decode statistics
         self.update_decode_stats()
         
     def save_audio(self):
-        """保存音频数据"""
+        """Save the audio data"""
         if len(self.matplotlib_widget.signals) > 0:
             try:
                 signal_data = np.array(self.matplotlib_widget.signals)
 
-                # 保存为WAV文件
+                # Save as a WAV file
                 with wave.open("received_audio.wav", "wb") as wf:
-                    wf.setnchannels(1)  # 单声道
-                    wf.setsampwidth(2)  # 采样宽度为2字节
-                    wf.setframerate(self.matplotlib_widget.freq)  # 设置采样率
-                    wf.writeframes(signal_data.tobytes())  # 写入数据
-                
-                self.status_label.setText("状态: 音频已保存为 received_audio.wav")
-                print("音频已保存为 received_audio.wav")
-                
+                    wf.setnchannels(1)  # Mono
+                    wf.setsampwidth(2)  # Sample width of 2 bytes
+                    wf.setframerate(self.matplotlib_widget.freq)  # Set the sample rate
+                    wf.writeframes(signal_data.tobytes())  # Write the data
+
+                self.status_label.setText("Status: Audio saved as received_audio.wav")
+                print("Audio saved as received_audio.wav")
+
             except Exception as e:
-                self.status_label.setText(f"状态: 保存失败 - {str(e)}")
-                print(f"保存音频失败: {e}")
+                self.status_label.setText(f"Status: Save failed - {str(e)}")
+                print(f"Failed to save audio: {e}")
         else:
-            self.status_label.setText("状态: 没有足够的数据可保存")
+            self.status_label.setText("Status: Not enough data to save")
 
 
 async def main():
-    """异步主函数"""
+    """Asynchronous main function"""
     app = QApplication(sys.argv)
-    
-    # 设置异步事件循环
+
+    # Set up the asynchronous event loop
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
-    
+
     window = MainWindow()
     window.show()
-    
+
     try:
         with loop:
             await loop.run_forever()
     except KeyboardInterrupt:
-        print("程序被用户中断")
+        print("Program interrupted by user")
     finally:
-        # 确保清理资源
+        # Ensure resources are cleaned up
         if window.udp_transport:
             window.udp_transport.close()

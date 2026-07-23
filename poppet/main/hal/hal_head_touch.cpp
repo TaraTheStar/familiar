@@ -12,29 +12,29 @@
 
 static const std::string_view _tag = "HAL-HeadTouch";
 
-// 触摸状态
+// Touch state
 enum class TouchState { IDLE, TOUCHED, SWIPING };
 
-// 配置参数
+// Configuration parameters
 struct TouchConfig {
     // Require SI12T_OUTPUT_HIGH — threshold=2 (MID) still let through events
     // where channel 2 + a neighbour both spiked to MID for ≥150 ms with no one
     // touching the device. HP-PROBE traces (2026-04-28) caught two such fires
     // at i=[1,2,2] and i=[0,2,1]. Bumping to 3 demands the firmest reading.
     uint8_t touch_threshold = 3;
-    int16_t swipe_threshold = 40;  // 使用百分比，范围-100到100
+    int16_t swipe_threshold = 40;  // Uses a percentage, range -100 to 100
     // Consecutive 50 ms samples of `is_touched()` required before we accept
     // the IDLE→TOUCHED transition. Filters sub-150 ms capacitive blips
     // (RF/EMI/proximity drift) without making deliberate pets feel laggy.
     uint8_t debounce_samples = 3;
 };
 
-// 触摸数据
+// Touch data
 struct TouchData {
     uint8_t intensity[3];
     uint32_t timestamp;
 
-    // 计算位置（返回-100到100的整数）
+    // Compute position (returns an integer from -100 to 100)
     int16_t get_position() const
     {
         uint16_t total = intensity[0] + intensity[1] + intensity[2];
@@ -58,14 +58,14 @@ struct TouchData {
     }
 };
 
-// 手势识别器类
+// Gesture recognizer class
 class GestureRecognizer {
 public:
     GestureRecognizer() : current_state(TouchState::IDLE), initial_position(0)
     {
     }
 
-    // 更新状态机，返回识别到的手势
+    // Update the state machine and return the recognized gesture
     HeadPetGesture update(const TouchData& data)
     {
         HeadPetGesture gesture = HeadPetGesture::None;

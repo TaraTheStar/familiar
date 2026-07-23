@@ -83,7 +83,7 @@ static void _wifi_init(int channel = 1)
 
     mclog::tagInfo(_tag, "wifi channel set to {}", channel);
 
-    // 建议先开启混杂模式再设信道，确保射频频率被强制锁定
+    // Recommended to enable promiscuous mode before setting the channel, to ensure the RF frequency is forcibly locked
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
     ESP_ERROR_CHECK(esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(false));
@@ -117,14 +117,14 @@ void Hal::startEspNow(int channel)
 
     espnow_config_t espnow_config = ESPNOW_INIT_CONFIG_DEFAULT();
 
-    // 2. 修改关键参数以兼容 Arduino
-    espnow_config.forward_enable         = false;  // 关闭转发（多跳），Arduino 无法解析带转发头的包
-    espnow_config.forward_switch_channel = false;  // 关闭自动切信道
-    espnow_config.send_retry_num         = 5;      // 失败重试次数（可按需调，建议5-10）
+    // 2. Modify key parameters for Arduino compatibility
+    espnow_config.forward_enable         = false;  // Disable forwarding (multi-hop); Arduino cannot parse packets with a forwarding header
+    espnow_config.forward_switch_channel = false;  // Disable automatic channel switching
+    espnow_config.send_retry_num         = 5;      // Number of retries on failure (adjust as needed, 5-10 recommended)
 
-    // 3. 修改接收使能开关
-    espnow_config.receive_enable.forward = false;  // 关闭转发包接收
-    espnow_config.receive_enable.data    = true;   // 必须开启这个，才能接收 Arduino 发来的普通数据包
+    // 3. Modify receive enable switches
+    espnow_config.receive_enable.forward = false;  // Disable reception of forwarded packets
+    espnow_config.receive_enable.data    = true;   // Must be enabled to receive normal data packets sent from Arduino
 
     espnow_init(&espnow_config);
     espnow_set_config_for_data_type(ESPNOW_DATA_TYPE_DATA, true, _handle_espnow_received);

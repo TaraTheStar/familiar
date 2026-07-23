@@ -23,7 +23,7 @@ void Hal::xiaozhi_mcp_init()
     // https://github.com/78/xiaozhi-esp32/blob/main/docs/mcp-usage.md
     auto& mcp_server = McpServer::GetInstance();
 
-    // System Prompt：
+    // System Prompt:
     // You can control the robot's head. Use get_yaw and get_pitch to sense current position. Use set_yaw for horizontal
     // movement and set_pitch for vertical movement. All angles are in degrees.
 

@@ -20,7 +20,7 @@ LV_IMAGE_DECLARE(decorator_sweat);
 SweatDecorator::SweatDecorator(lv_obj_t* parent, uint32_t destroyAfterMs, uint32_t animationIntervalMs)
     : _animation_interval_ms(animationIntervalMs)
 {
-    // 初始化图像
+    // Initialize the image
     _sweat = std::make_unique<Image>(parent);
     _sweat->setSrc(&decorator_sweat);
     _sweat->setAlign(LV_ALIGN_CENTER);
@@ -50,35 +50,35 @@ void SweatDecorator::_update()
 {
     uint32_t now = GetHAL().millis();
 
-    // 检查自动销毁
+    // Check for auto-destroy
     if (_has_lifetime && now >= _destroy_at) {
         requestDestroy();
         return;
     }
 
-    // 检查动画帧更新
+    // Check for animation frame update
     if (_animation_interval_ms > 0 && now >= _next_animation_tick) {
         _next_animation_tick = now + _animation_interval_ms;
 
         int current_y_frame = _sweat_pos_y_frames[_animation_index];
 
         if (current_y_frame == 0) {
-            // 特殊帧：隐藏图像
+            // Special frame: hide the image
             setVisible(false);
         } else {
-            // 普通帧：移动位置并显示
+            // Normal frame: move position and show
             setVisible(true);
             _sweat->setPos(_sweat_default_position.x, current_y_frame);
         }
 
-        // 步进索引
+        // Step the index
         _animation_index = (_animation_index + 1) % _sweat_pos_y_frames.size();
     }
 }
 
 void SweatDecorator::setPosition(int x, int y)
 {
-    // 注意：这里的 setPosition 会覆盖动画中的 x 坐标
+    // Note: this setPosition overrides the x coordinate from the animation
     if (_sweat) {
         _sweat->setPos(x, y);
     }

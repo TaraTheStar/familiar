@@ -50,118 +50,118 @@ typedef enum {
 typedef enum { SI12T_OUTPUT_NONE = 0, SI12T_OUTPUT_LOW, SI12T_OUTPUT_MID, SI12T_OUTPUT_HIGH } si12t_output_t;
 
 /**
- * @brief Si12T配置结构体
+ * @brief Si12T config struct
  */
 typedef struct {
-    i2c_master_bus_handle_t i2c_bus; /*!< I2C总线句柄 */
-    uint8_t dev_addr;                /*!< 设备地址，默认SI12T_GND_ADDRESS */
+    i2c_master_bus_handle_t i2c_bus; /*!< I2C bus handle */
+    uint8_t dev_addr;                /*!< Device address, defaults to SI12T_GND_ADDRESS */
 } si12t_config_t;
 
 /**
- * @brief Si12T设备句柄
+ * @brief Si12T device handle
  */
 typedef struct si12t_dev_t *si12t_handle_t;
 
 extern uint8_t si12t_point_type[3];
 
 /**
- * @brief 初始化Si12T设备
+ * @brief Initialize the Si12T device
  *
- * @param config 配置参数
- * @param handle 返回的设备句柄
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param config Configuration parameters
+ * @param handle Returned device handle
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_init(const si12t_config_t *config, si12t_handle_t *handle);
 
 /**
- * @brief 初始化Si12T设备（使用灵敏度参数）
+ * @brief Initialize the Si12T device (with sensitivity parameters)
  *
- * @param handle 设备句柄
- * @param sens_type 灵敏度类型
- * @param sens_level 灵敏度等级
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @param sens_type Sensitivity type
+ * @param sens_level Sensitivity level
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_setup(si12t_handle_t handle, si12t_type_t sens_type, si12t_sensitivity_level_t sens_level);
 
 /**
- * @brief 删除Si12T设备
+ * @brief Delete the Si12T device
  *
- * @param handle 设备句柄
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_delete(si12t_handle_t handle);
 
 /**
- * @brief 使能所有通道
+ * @brief Enable all channels
  *
- * @param handle 设备句柄
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_enable_channel(si12t_handle_t handle);
 
 /**
- * @brief 设置灵敏度
+ * @brief Set sensitivity
  *
- * @param handle 设备句柄
- * @param sens_type 灵敏度类型
- * @param sens_level 灵敏度等级
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @param sens_type Sensitivity type
+ * @param sens_level Sensitivity level
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_set_sensitivity(si12t_handle_t handle, si12t_type_t sens_type, si12t_sensitivity_level_t sens_level);
 
 /**
- * @brief 获取灵敏度
+ * @brief Get sensitivity
  *
- * @param handle 设备句柄
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_get_sensitivity(si12t_handle_t handle);
 
 /**
- * @brief 设置Ctrl1寄存器
+ * @brief Set the Ctrl1 register
  *
- * @param handle 设备句柄
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_set_ctrl1(si12t_handle_t handle);
 
 /**
- * @brief 设置Ctrl2寄存器
+ * @brief Set the Ctrl2 register
  *
- * @param handle 设备句柄
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_set_ctrl2(si12t_handle_t handle);
 
 /**
- * @brief 使能睡眠模式
+ * @brief Enable sleep mode
  *
- * @param handle 设备句柄
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_sleep_enable(si12t_handle_t handle);
 
 /**
- * @brief 禁用睡眠模式
+ * @brief Disable sleep mode
  *
- * @param handle 设备句柄
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_sleep_disable(si12t_handle_t handle);
 
 /**
- * @brief 读取触摸结果
+ * @brief Read touch result
  *
- * @param handle 设备句柄
- * @param touch_result 触摸结果输出
- * @return esp_err_t ESP_OK成功，其他失败
+ * @param handle Device handle
+ * @param touch_result Touch result output
+ * @return esp_err_t ESP_OK on success, others on failure
  */
 esp_err_t si12t_read_touch_result(si12t_handle_t handle, uint8_t *touch_result);
 
 /**
- * @brief 解析触摸结果
+ * @brief Parse touch result
  *
- * @param touch_result 触摸结果
+ * @param touch_result Touch result
  */
 void si12t_parse_touch_result(uint8_t touch_result);
 

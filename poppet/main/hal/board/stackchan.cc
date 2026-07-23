@@ -112,8 +112,8 @@ public:
             uint8_t val = ReadReg(0x90);
             WriteReg(0x90, val & 0x7F);
         } else {
-            // 映射计算：将 1~100 映射到 寄存器值 20~28
-            // 公式：MinReg + (input * (MaxReg - MinReg) / MaxInput)
+            // Mapping: map 1~100 to register values 20~28
+            // Formula: MinReg + (input * (MaxReg - MinReg) / MaxInput)
             // 20 + (brightness * 8 / 100)
             if (brightness > 100) {
                 brightness = 100;
@@ -387,7 +387,7 @@ private:
         ESP_LOGI(TAG, "Init FT6336");
         ft6336_ = new Ft6336(i2c_bus_, 0x38);
 
-        // 创建定时器，20ms 间隔
+        // Create a timer with a 20ms interval
         esp_timer_create_args_t timer_args = {
             .callback =
                 [](void* arg) {

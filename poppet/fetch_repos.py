@@ -22,14 +22,14 @@ def clone_or_update_repo(
             check=True,
         )
 
-    # 应用 patch
+    # Apply patch
     if patch_path:
         patch_full_path = (
             patch_path
             if os.path.isabs(patch_path)
             else os.path.join(os.getcwd(), patch_path)
         )
-        # 使用 git apply --check 先检测补丁是否能应用，避免报错
+        # Use git apply --check first to verify the patch applies, avoiding errors
         check_result = subprocess.run(
             ["git", "-C", path, "apply", "--check", patch_full_path]
         )

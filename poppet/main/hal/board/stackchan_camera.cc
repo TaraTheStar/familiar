@@ -142,7 +142,7 @@ StackChanCamera::StackChanCamera(const esp_video_init_config_t& config)
 
     const char* video_device_name = nullptr;
 
-    if (false) { /* 用于构建 else if */
+    if (false) { /* Used to build the else if chain */
     }
 #if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
     else if (config.csi != nullptr) {
@@ -225,7 +225,7 @@ StackChanCamera::StackChanCamera(const esp_video_init_config_t& config)
     uint32_t best_fmt           = 0;
     int best_rank               = 1 << 30;  // large number
 
-    // 注: 当前版本 esp_video 中 YUV422P 实际输出为 YUYV。
+    // Note: in the current version of esp_video, YUV422P actually outputs as YUYV.
 #if defined(CONFIG_STACKCHAN_ENABLE_ROTATE_CAMERA_IMAGE) && defined(CONFIG_SOC_PPA_SUPPORTED)
     auto get_rank = [](uint32_t fmt) -> int {
         switch (fmt) {
@@ -234,7 +234,7 @@ StackChanCamera::StackChanCamera(const esp_video_init_config_t& config)
             case V4L2_PIX_FMT_RGB565:
                 return 1;
 #ifdef CONFIG_STACKCHAN_ENABLE_HARDWARE_JPEG_ENCODER
-            case V4L2_PIX_FMT_YUV420:  // 软件 JPEG 编码器不支持 YUV420 格式
+            case V4L2_PIX_FMT_YUV420:  // The software JPEG encoder does not support the YUV420 format
                 return 2;
 #endif  // CONFIG_STACKCHAN_ENABLE_HARDWARE_JPEG_ENCODER
             case V4L2_PIX_FMT_GREY:
@@ -308,7 +308,7 @@ StackChanCamera::StackChanCamera(const esp_video_init_config_t& config)
     frame_.height = setformat.fmt.pix.height;
 #endif
 
-    // 申请缓冲并mmap
+    // Request buffers and mmap
     struct v4l2_requestbuffers req = {};
     req.count                      = strcmp(video_device_name, ESP_VIDEO_MIPI_CSI_DEVICE_NAME) == 0 ? 2 : 1;
     req.type                       = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -447,7 +447,7 @@ bool StackChanCamera::Capture()
             return false;
         }
         if (i == 2) {
-            // 保存帧副本到PSRAM
+            // Save a copy of the frame to PSRAM
             if (frame_.data) {
                 heap_caps_free(frame_.data);
                 frame_.data   = nullptr;
@@ -498,7 +498,7 @@ bool StackChanCamera::Capture()
                     frame_.format = sensor_format_;
                     break;
                 case V4L2_PIX_FMT_YUV422P: {
-                    // 这个格式是 422 YUYV，不是 planer
+                    // This format is 422 YUYV, not planar
                     frame_.format = V4L2_PIX_FMT_YUYV;
 #ifdef CONFIG_STACKCHAN_ENABLE_CAMERA_ENDIANNESS_SWAP
                     {
@@ -516,8 +516,8 @@ bool StackChanCamera::Capture()
                     break;
                 }
                 case V4L2_PIX_FMT_RGB565X: {
-                    // 大端序的 RGB565 需要转换为小端序
-                    // 目前 esp_video 的大小端都会返回格式为 RGB565，不会返回格式为 RGB565X，此 case 用于未来版本兼容
+                    // Big-endian RGB565 needs to be converted to little-endian
+                    // Currently esp_video returns the RGB565 format for both endiannesses and never returns RGB565X; this case is for future version compatibility
                     auto src16         = (uint16_t*)mmap_buffers_[buf.index].start;
                     auto dst16         = (uint16_t*)frame_.data;
                     size_t pixel_count = (size_t)frame_.width * (size_t)frame_.height;
@@ -738,7 +738,7 @@ bool StackChanCamera::Capture()
             srm_cfg.out.block_offset_y = 0;
             srm_cfg.out.srm_cm         = PPA_SRM_COLOR_MODE_RGB565;
 
-            // 等比例缩放 1.0
+            // Proportional scaling 1.0
             srm_cfg.scale_x        = 1.0f;
             srm_cfg.scale_y        = 1.0f;
             srm_cfg.rotation_angle = ppa_angle;
@@ -773,7 +773,7 @@ bool StackChanCamera::Capture()
         }
     }
 
-    // 显示预览图片
+    // Display the preview image
     auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
     if (display != nullptr) {
         if (!frame_.data) {
@@ -783,12 +783,12 @@ bool StackChanCamera::Capture()
         uint16_t w                     = frame_.width;
         uint16_t h                     = frame_.height;
         size_t lvgl_image_size         = frame_.len;
-        size_t stride                  = ((w * 2) + 3) & ~3;  // 4字节对齐
+        size_t stride                  = ((w * 2) + 3) & ~3;  // 4-byte alignment
         lv_color_format_t color_format = LV_COLOR_FORMAT_RGB565;
         uint8_t* data                  = nullptr;
 
         switch (frame_.format) {
-            // LVGL 显示 YUV 系的图像似乎都有问题，暂时转换为 RGB565 显示
+            // LVGL seems to have problems displaying YUV-family images, so for now convert to RGB565 for display
             case V4L2_PIX_FMT_YUYV:
             case V4L2_PIX_FMT_YUV420:
             case V4L2_PIX_FMT_RGB24: {
@@ -843,7 +843,7 @@ bool StackChanCamera::Capture()
                     return false;
                 }
                 memcpy(data, frame_.data, frame_.len);
-                lvgl_image_size = frame_.len;  // fallthrough 时兼顾 YUYV 与 RGB565
+                lvgl_image_size = frame_.len;  // Handles both YUYV and RGB565 on fallthrough
                 break;
 
 #ifdef CONFIG_STACKCHAN_CAMERA_ALLOW_JPEG_INPUT
@@ -911,7 +911,7 @@ bool StackChanCamera::startStreaming()
     }
 
 #ifdef CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE
-    // 当启用 ISP 时，ISP 需要一些照片来初始化参数，因此开启后拍摄5s照片并丢弃
+    // When ISP is enabled, the ISP needs some photos to initialize its parameters, so capture and discard 5s of photos after enabling
     // Synchronous: caller blocks until the warmup completes so on return
     // the stream is ready to dequeue. With ISP, this is ~5 s on first
     // acquire after boot. Subsequent acquires hit the streaming_on_
@@ -981,7 +981,7 @@ bool StackChanCamera::StreamCaptures()
             return false;
         }
         {
-            // 保存帧副本到PSRAM
+            // Save a copy of the frame to PSRAM
             if (frame_.data) {
                 heap_caps_free(frame_.data);
                 frame_.data   = nullptr;
@@ -1032,7 +1032,7 @@ bool StackChanCamera::StreamCaptures()
                     frame_.format = sensor_format_;
                     break;
                 case V4L2_PIX_FMT_YUV422P: {
-                    // 这个格式是 422 YUYV，不是 planer
+                    // This format is 422 YUYV, not planar
                     frame_.format = V4L2_PIX_FMT_YUYV;
 #ifdef CONFIG_STACKCHAN_ENABLE_CAMERA_ENDIANNESS_SWAP
                     {
@@ -1050,8 +1050,8 @@ bool StackChanCamera::StreamCaptures()
                     break;
                 }
                 case V4L2_PIX_FMT_RGB565X: {
-                    // 大端序的 RGB565 需要转换为小端序
-                    // 目前 esp_video 的大小端都会返回格式为 RGB565，不会返回格式为 RGB565X，此 case 用于未来版本兼容
+                    // Big-endian RGB565 needs to be converted to little-endian
+                    // Currently esp_video returns the RGB565 format for both endiannesses and never returns RGB565X; this case is for future version compatibility
                     auto src16         = (uint16_t*)mmap_buffers_[buf.index].start;
                     auto dst16         = (uint16_t*)frame_.data;
                     size_t pixel_count = (size_t)frame_.width * (size_t)frame_.height;
@@ -1113,27 +1113,27 @@ bool StackChanCamera::SetVFlip(bool enabled)
 }
 
 /**
- * @brief 将摄像头捕获的图像发送到远程服务器进行AI分析和解释
+ * @brief Send the image captured by the camera to a remote server for AI analysis and explanation
  *
- * 该函数将当前摄像头缓冲区中的图像编码为JPEG格式，并通过HTTP POST请求
- * 以multipart/form-data的形式发送到指定的解释服务器。服务器将根据提供的
- * 问题对图像进行AI分析并返回结果。
+ * This function encodes the image in the current camera buffer as JPEG and sends it via an HTTP POST
+ * request as multipart/form-data to the specified explain server. The server performs AI analysis of
+ * the image based on the provided question and returns the result.
  *
- * 实现特点：
- * - 使用独立线程编码JPEG，与主线程分离
- * - 采用分块传输编码(chunked transfer encoding)优化内存使用
- * - 通过队列机制实现编码线程和发送线程的数据同步
- * - 支持设备ID、客户端ID和认证令牌的HTTP头部配置
+ * Implementation notes:
+ * - Uses a separate thread to encode JPEG, decoupled from the main thread
+ * - Uses chunked transfer encoding to optimize memory usage
+ * - Uses a queue mechanism to synchronize data between the encoding thread and the sending thread
+ * - Supports HTTP header configuration for device ID, client ID, and authentication token
  *
- * @param question 要向AI提出的关于图像的问题，将作为表单字段发送
- * @return std::string 服务器返回的JSON格式响应字符串
- *         成功时包含AI分析结果，失败时包含错误信息
- *         格式示例：{"success": true, "result": "分析结果"}
- *                  {"success": false, "message": "错误信息"}
+ * @param question The question to ask the AI about the image, sent as a form field
+ * @return std::string The JSON-format response string returned by the server
+ *         On success it contains the AI analysis result; on failure it contains an error message
+ *         Format example: {"success": true, "result": "analysis result"}
+ *                         {"success": false, "message": "error message"}
  *
- * @note 调用此函数前必须先调用SetExplainUrl()设置服务器URL
- * @note 函数会等待之前的编码线程完成后再开始新的处理
- * @warning 如果摄像头缓冲区为空或网络连接失败，将返回错误信息
+ * @note SetExplainUrl() must be called to set the server URL before calling this function
+ * @note The function waits for the previous encoding thread to finish before starting new processing
+ * @warning If the camera buffer is empty or the network connection fails, an error message is returned
  */
 std::string StackChanCamera::Explain(const std::string& question)
 {

@@ -15,25 +15,25 @@ namespace stackchan {
 class SpeakingModifier : public Modifier {
 public:
     /**
-     * @param destroyAfterMs 持续说话时间（0 为永久，直到手动移除）
-     * @param mouthIntervalMs 嘴巴开合频率（默认 180ms）
-     * @param enableMotion 是否在说话时伴随头部微动
+     * @param destroyAfterMs Duration of speaking (0 = forever, until manually removed)
+     * @param mouthIntervalMs Mouth open/close frequency (default 180ms)
+     * @param enableMotion Whether to add subtle head motion while speaking
      */
     SpeakingModifier(uint32_t destroyAfterMs = 0, uint32_t mouthIntervalMs = 180, bool enableMotion = true)
         : _mouth_interval_ms(mouthIntervalMs), _enable_motion(enableMotion)
     {
         uint32_t now = GetHAL().millis();
 
-        // 销毁计时
+        // Destroy timing
         if (destroyAfterMs > 0) {
             _destroy_at   = now + destroyAfterMs;
             _has_lifetime = true;
         }
 
-        // 嘴巴计时
+        // Mouth timing
         _next_mouth_tick = now + _mouth_interval_ms;
 
-        // 动作计时
+        // Motion timing
         if (_enable_motion) {
             _next_motion_tick = now + Random::getInstance().getInt(1000, 2000);
         }
@@ -49,22 +49,22 @@ public:
 
         uint32_t now = GetHAL().millis();
 
-        // 检查销毁逻辑
+        // Check destroy logic
         if (_has_lifetime && now >= _destroy_at) {
-            stackchan.avatar().mouth().setWeight(0);  // 闭嘴
+            stackchan.avatar().mouth().setWeight(0);  // Close the mouth
             requestDestroy();
             return;
         }
 
-        // 嘴巴开合动画
+        // Mouth open/close animation
         if (now >= _next_mouth_tick) {
             _next_mouth_tick = now + _mouth_interval_ms;
             animate_mouth(stackchan.avatar());
         }
 
-        // 身体微动动作
+        // Subtle body motion
         if (_enable_motion && now >= _next_motion_tick) {
-            // 随机下一个动作的时间 (1.5s ~ 2.5s)
+            // Randomize the time until the next motion (1.5s ~ 2.5s)
             _next_motion_tick = now + Random::getInstance().getInt(1500, 2500);
             perform_subtle_speaking_motion(stackchan);
         }
@@ -110,13 +110,13 @@ private:
         int32_t target_pitch = _prev_angles.y;
 
         int action = Random::getInstance().getInt(0, 10);
-        int speed  = Random::getInstance().getInt(100, 200);  // 说话时的动作都很慢
+        int speed  = Random::getInstance().getInt(100, 200);  // Motions while speaking are all very slow
 
         if (action < 5) {
-            // 动作 A：轻微点头 (Nod)
+            // Action A: slight nod (Nod)
             target_pitch += Random::getInstance().getInt(-20, 50);
         } else {
-            // 动作 B：轻微摆头 (Yaw drift)
+            // Action B: slight head sway (Yaw drift)
             target_yaw += Random::getInstance().getInt(-40, 40);
             target_pitch += Random::getInstance().getInt(-20, 20);
         }
@@ -124,13 +124,13 @@ private:
         motion.moveWithSpeed(target_yaw, target_pitch, speed, "speaking");
     }
 
-    // 配置常量
+    // Configuration constants
     const int _open_min_weight  = 40;
     const int _open_max_weight  = 80;
     const int _close_min_weight = 0;
     const int _close_max_weight = 20;
 
-    // 计时状态
+    // Timing state
     uint32_t _destroy_at       = 0;
     uint32_t _next_mouth_tick  = 0;
     uint32_t _next_motion_tick = 0;

@@ -16,7 +16,7 @@ void AppLauncher::onLauncherCreate()
 {
     mclog::tagInfo(getAppInfo().name, "on create");
 
-    // 打开自己
+    // Open itself
     open();
 }
 

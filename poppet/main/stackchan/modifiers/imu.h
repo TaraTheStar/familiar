@@ -34,13 +34,13 @@ public:
     {
         uint32_t now = GetHAL().millis();
 
-        // 收到晃动事件
+        // Received a shake event
         if (_event_shake) {
             _event_shake = false;
             handle_shake_start(stackchan, now);
         }
 
-        // 如果处于晃动反应状态
+        // If in the shake reaction state
         if (_is_reacting) {
             if (now >= _next_toggle_tick) {
                 _next_toggle_tick = now + 600;
@@ -60,7 +60,7 @@ public:
                 motion.goHome(300, "imu_shake_react");
             }
 
-            // 检查是否结束反应
+            // Check whether the reaction has ended
             if (now >= _restore_at) {
                 restore_state(stackchan);
             }
@@ -71,7 +71,7 @@ private:
     void handle_shake_start(Modifiable& stackchan, uint32_t now)
     {
         if (!_is_reacting) {
-            // 首次触发时，记录状态以便恢复
+            // On first trigger, record the state so it can be restored
             _is_reacting = true;
 
             auto& avatar = stackchan.avatar();
@@ -88,10 +88,10 @@ private:
                 stackchan.avatar().addDecorator(std::make_unique<avatar::ShyDecorator>(lv_screen_active(), 0));
         }
 
-        // 刷新恢复时间和切换时间
+        // Refresh the restore time and toggle time
         _restore_at = now + _reaction_duration_ms;
         if (_next_toggle_tick <= now) {
-            _next_toggle_tick = now;  // 立即触发第一次嘴巴动作
+            _next_toggle_tick = now;  // Trigger the first mouth motion immediately
         }
     }
 
@@ -119,11 +119,11 @@ private:
         _is_reacting = false;
     }
 
-    // 信号相关
+    // Signal related
     int _signal_connection;
     volatile bool _event_shake = false;
 
-    // 状态控制
+    // State control
     bool _is_reacting          = false;
     bool _toggle_phase         = false;
     uint32_t _restore_at       = 0;
