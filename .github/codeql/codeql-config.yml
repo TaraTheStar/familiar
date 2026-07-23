@@ -1,0 +1,12 @@
+name: "familiar CodeQL config"
+
+# Paths excluded from analysis. These are pristine third-party drops that we
+# track verbatim from upstream and do not modify, so CodeQL findings in them
+# are not actionable for us (patching would diverge from upstream on every
+# vendor bump). Note: stackchan-esp32 is intentionally NOT excluded — we own
+# and modify that firmware in-tree, so we fix its findings directly.
+paths-ignore:
+  # Bosch BMI270 sensor driver (has its own LICENSE; untouched since import).
+  - poppet/main/hal/drivers/bmi270/BMI270_SensorAPI
+  # whisper.cpp submodule (upstream, tracked via .gitmodules).
+  - grimoire/third_party/whisper.cpp
