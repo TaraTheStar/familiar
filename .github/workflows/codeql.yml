@@ -22,12 +22,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Go is intentionally omitted: its only module (grimoire) links
-          # whisper.cpp + libopus via cgo, and Go has no build-less extraction
-          # mode ("none" is C/C++/Python only), so scanning it would require a
-          # full whisper.cpp cmake build on every run — not worth the CI minutes.
-          # C/C++ and Python cover where the actual findings live and cost
-          # nothing to extract (no compilation).
+          # Go has no build-less extraction mode, and grimoire links
+          # whisper.cpp + libopus via cgo, so it must actually build. We keep
+          # that affordable by caching the whisper.cpp static libs on their
+          # pinned submodule SHA (see the "Cache whisper.cpp build" step): a
+          # steady-state run restores the cache and only re-compiles when the
+          # submodule is bumped. C/C++ and Python extract without any build.
+          - language: go
+            build-mode: manual
           - language: c-cpp
             build-mode: none
           - language: python
@@ -36,6 +38,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # Only the Go job needs the whisper.cpp submodule; c-cpp/python skip
+          # the extra fetch (whisper.cpp is paths-ignored for c-cpp anyway).
+          submodules: ${{ matrix.language == 'go' && 'recursive' || 'false' }}
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: grimoire/go.mod
+
+      - name: Install cgo build deps
+        if: matrix.language == 'go'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libopus-dev libopusfile-dev pkg-config
+
+      - name: Resolve pinned whisper.cpp commit
+        if: matrix.language == 'go'
+        id: whisper
+        run: echo "sha=$(git rev-parse HEAD:grimoire/third_party/whisper.cpp)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache whisper.cpp build
+        if: matrix.language == 'go'
+        uses: actions/cache@v4
+        with:
+          path: grimoire/third_party/whisper.cpp/build
+          key: whisper-${{ runner.os }}-${{ steps.whisper.outputs.sha }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -43,6 +73,13 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Build grimoire (Go manual build-mode)
+        if: matrix.language == 'go'
+        working-directory: grimoire
+        run: |
+          make whisper-build   # no-op when the cache restored build/
+          go build ./...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
