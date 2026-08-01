@@ -9,7 +9,7 @@ func TestWakeGateRejects(t *testing.T) {
 		transcript string
 		reject     bool
 	}{
-		// Real false-wake transcripts observed on hardware, 2026-07-16.
+		// Real false-wake transcripts observed on hardware.
 		{"Hey lunch.  That's all.", true},
 		{"Hey, lunch. That's all.", true},
 		{"Hey lunch. That's all.", true},
