@@ -10,8 +10,8 @@ import (
 // Wake gate — a server-side backstop for adversarial false wakes.
 //
 // The on-device microWakeWord model confuses "Hey Loona" with a small family
-// of near-phrases ("hey lunch" being the worst measured offender: it scored
-// inside the genuine-wake probability band on real hardware, 2026-07-16).
+// of near-phrases ("hey lunch" being the worst measured offender: on real
+// hardware it scored inside the genuine-wake probability band).
 // When such a false wake opens a session, the wake phrase itself leaks into
 // the first turn's pre-roll audio and whisper transcribes it faithfully —
 // so the transcript is a second, much more discriminating classifier.
