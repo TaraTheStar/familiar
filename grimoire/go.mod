@@ -19,4 +19,4 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 )
 
-require github.com/TaraTheStar/azoth v1.1.6
+require github.com/TaraTheStar/azoth v1.1.7

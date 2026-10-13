@@ -1,5 +1,5 @@
-github.com/TaraTheStar/azoth v1.1.6 h1:xMuYCXM4CGTwF1qa7HjakdjiGkOaedTfoEbqLQaCgF8=
-github.com/TaraTheStar/azoth v1.1.6/go.mod h1:nUSS6YuOIHn7j54cvOCrV2O7w3dYdEL5YLogm4nmdXA=
+github.com/TaraTheStar/azoth v1.1.7 h1:i4slL9hb938flmsaPe1Nk8Vs/Qna7Qec5/rNPZ8JZJY=
+github.com/TaraTheStar/azoth v1.1.7/go.mod h1:nUSS6YuOIHn7j54cvOCrV2O7w3dYdEL5YLogm4nmdXA=
 github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
