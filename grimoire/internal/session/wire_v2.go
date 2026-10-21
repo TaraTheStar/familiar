@@ -81,17 +81,29 @@ func newV2Out(conn *websocket.Conn, encoder *audio.Encoder, log *slog.Logger, in
 	return o
 }
 
+// send writes one control frame. A ctx already cancelled means the turn was
+// interrupted, so the frame is dropped; otherwise it is written on a context
+// detached from cancellation. coder/websocket closes the whole connection when
+// a write's context is or becomes done, so a barge-in landing on any of these
+// writes would otherwise take the session down instead of cancelling one reply.
+func (o *v2Out) send(ctx context.Context, v any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return writeJSON(context.WithoutCancel(ctx), o.conn, v)
+}
+
 // Transcript sends the ASR result (display-only). final=false is an incremental
 // partial emitted while the user is still speaking (streaming ASR, §4.3, §11 Q6);
 // the turn sends the authoritative result once with final=true. With streaming
 // disabled only the single final=true transcript is ever sent.
 func (o *v2Out) Transcript(ctx context.Context, text string, final bool) error {
-	return writeJSON(ctx, o.conn, protov2.Transcript{Type: "transcript", Text: text, Final: final})
+	return o.send(ctx, protov2.Transcript{Type: "transcript", Text: text, Final: final})
 }
 
 // Display drives the avatar. Unlike v1, v2 carries both emotion and status.
 func (o *v2Out) Display(ctx context.Context, emotion, status string) error {
-	return writeJSON(ctx, o.conn, protov2.Display{Type: "display", Emotion: emotion, Status: status})
+	return o.send(ctx, protov2.Display{Type: "display", Emotion: emotion, Status: status})
 }
 
 // SpeakBegin opens the reply's single audio stream: grabs the wire lock, mints
@@ -104,7 +116,7 @@ func (o *v2Out) SpeakBegin(ctx context.Context) error {
 	o.mu.Lock()
 	o.utterance = int(o.nextUtterance.Add(1))
 	o.segs = o.segs[:0]
-	if err := writeJSON(ctx, o.conn, protov2.AudioBegin{Type: "audio_begin", UtteranceID: o.utterance}); err != nil {
+	if err := o.send(ctx, protov2.AudioBegin{Type: "audio_begin", UtteranceID: o.utterance}); err != nil {
 		o.mu.Unlock()
 		return fmt.Errorf("send audio_begin: %w", err)
 	}
@@ -117,7 +129,7 @@ func (o *v2Out) SpeakBegin(ctx context.Context) error {
 // caption is sent by SpeakEnd.
 func (o *v2Out) Caption(ctx context.Context, segment string) error {
 	o.segs = append(o.segs, segment)
-	return writeJSON(ctx, o.conn, protov2.Caption{
+	return o.send(ctx, protov2.Caption{
 		Type:        "caption",
 		UtteranceID: o.utterance,
 		Text:        strings.Join(o.segs, " "),
@@ -271,14 +283,14 @@ func (o *v2Out) SpeakEnd(ctx context.Context) error {
 // SendError emits a first-class v2 error (§4.9). Best-effort: a failed send is
 // logged-by-omission since the session is already on an error path.
 func (o *v2Out) SendError(ctx context.Context, code, message string, refID int) {
-	_ = writeJSON(ctx, o.conn, protov2.Error{Type: "error", Code: code, Message: message, RefID: refID})
+	_ = o.send(ctx, protov2.Error{Type: "error", Code: code, Message: message, RefID: refID})
 }
 
 // SendAlert renders a full-screen popup on the device (§4.6), used to surface
 // device telemetry (alertSink). emotion is required by the wire; sound may be
 // empty (firmware-specific values otherwise).
 func (o *v2Out) SendAlert(ctx context.Context, title, message, emotion, sound string) error {
-	return writeJSON(ctx, o.conn, protov2.Alert{
+	return o.send(ctx, protov2.Alert{
 		Type: "alert", Title: title, Message: message, Emotion: emotion, Sound: sound,
 	})
 }
@@ -288,7 +300,7 @@ func (o *v2Out) SendAlert(ctx context.Context, title, message, emotion, sound st
 // OnAudioChannelClosed and reconnects lazily on the next wake word.
 func (o *v2Out) Close(ctx context.Context, reason string) error {
 	// goodbye is best-effort and advisory; ignore its error and always close.
-	_ = writeJSON(ctx, o.conn, protov2.Goodbye{Type: "goodbye", Reason: goodbyeReason(reason)})
+	_ = o.send(ctx, protov2.Goodbye{Type: "goodbye", Reason: goodbyeReason(reason)})
 	return o.conn.Close(websocket.StatusNormalClosure, reason)
 }
 
