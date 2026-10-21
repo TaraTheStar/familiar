@@ -29,6 +29,13 @@ jobs:
           go-version-file: grimoire/go.mod
           cache-dependency-path: grimoire/go.sum
 
+      # Scoped to grimoire's own trees: the vendored whisper.cpp is not ours to
+      # format.
+      - name: gofmt
+        run: |
+          out=$(gofmt -l cmd internal)
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+
       - name: Install cgo build deps
         run: |
           sudo apt-get update
