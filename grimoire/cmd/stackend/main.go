@@ -24,8 +24,8 @@ import (
 	"time"
 	_ "time/tzdata" // embed the IANA tz database so LoadLocation works in the slim runtime image
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/asr"
 	"github.com/TaraTheStar/azoth/llm"
+	"github.com/TaraTheStar/familiar/grimoire/internal/asr"
 	"github.com/TaraTheStar/familiar/grimoire/internal/mcptools"
 	"github.com/TaraTheStar/familiar/grimoire/internal/ota"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"

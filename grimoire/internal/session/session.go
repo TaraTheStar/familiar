@@ -26,8 +26,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/TaraTheStar/familiar/grimoire/internal/audio"
 	"github.com/TaraTheStar/azoth/llm"
+	"github.com/TaraTheStar/familiar/grimoire/internal/audio"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protocol"
 	"github.com/TaraTheStar/familiar/grimoire/internal/protov2"
 	"github.com/TaraTheStar/familiar/grimoire/internal/tts"
