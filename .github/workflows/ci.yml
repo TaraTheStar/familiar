@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # A merge made with the workflow token starts no push run, so without this
+  # an auto-merged main would never be tested as it actually stands.
+  schedule:
+    - cron: '17 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: grimoire
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: grimoire/go.mod
+          cache-dependency-path: grimoire/go.sum
+
+      - name: Install cgo build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libopus-dev libopusfile-dev pkg-config
+
+      - name: Resolve pinned whisper.cpp commit
+        id: whisper
+        run: echo "sha=$(git rev-parse HEAD:third_party/whisper.cpp)" >> "$GITHUB_OUTPUT"
+
+      # Same key as the CodeQL workflow, so the two share one whisper.cpp
+      # build and only a submodule bump pays for a recompile.
+      - name: Cache whisper.cpp build
+        uses: actions/cache@v6
+        with:
+          path: grimoire/third_party/whisper.cpp/build
+          key: whisper-${{ runner.os }}-${{ steps.whisper.outputs.sha }}
+
+      # Built up front because `make vet`, unlike `make test`, does not depend
+      # on the whisper.cpp libs and would run against a cold cache without them.
+      - name: whisper.cpp
+        run: make whisper-build
+
+      - name: vet
+        run: make vet
+
+      - name: test
+        run: make test
