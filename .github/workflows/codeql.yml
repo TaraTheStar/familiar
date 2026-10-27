@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: grimoire/third_party/whisper.cpp/build
-          key: whisper-${{ runner.os }}-${{ steps.whisper.outputs.sha }}
+          key: whisper-portable-${{ runner.os }}-${{ steps.whisper.outputs.sha }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4.38.3
@@ -78,7 +78,7 @@ jobs:
         if: matrix.language == 'go'
         working-directory: grimoire
         run: |
-          make whisper-build   # no-op when the cache restored build/
+          make whisper-build WHISPER_CMAKE_FLAGS=-DGGML_NATIVE=OFF   # no-op when the cache restored build/
           go build ./...
 
       - name: Perform CodeQL Analysis
