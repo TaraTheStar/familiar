@@ -11,6 +11,11 @@ WHISPER_DIR := third_party/whisper.cpp
 WHISPER_BUILD := $(WHISPER_DIR)/build
 WHISPER_LIB := $(WHISPER_BUILD)/src/libwhisper.a
 
+# Extra cmake flags for the whisper.cpp build. ggml defaults to -march=native,
+# which is right on the machine that will run the binary and wrong anywhere the
+# build is cached and reused on another CPU — CI sets -DGGML_NATIVE=OFF.
+WHISPER_CMAKE_FLAGS ?=
+
 MODELS_DIR := $(WHISPER_DIR)/models
 TINY_EN := $(MODELS_DIR)/ggml-tiny.en.bin
 BASE_EN := $(MODELS_DIR)/ggml-base.en.bin
@@ -42,7 +47,8 @@ $(WHISPER_LIB):
 	  -DWHISPER_BUILD_TESTS=OFF \
 	  -DWHISPER_BUILD_EXAMPLES=OFF \
 	  -DWHISPER_BUILD_SERVER=OFF \
-	  -DGGML_OPENMP=OFF
+	  -DGGML_OPENMP=OFF \
+	  $(WHISPER_CMAKE_FLAGS)
 	cd $(WHISPER_DIR) && cmake --build build --config Release -j$$(nproc)
 
 whisper-clean:

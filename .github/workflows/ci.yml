@@ -43,7 +43,7 @@ jobs:
 
       - name: Resolve pinned whisper.cpp commit
         id: whisper
-        run: echo "sha=$(git rev-parse HEAD:third_party/whisper.cpp)" >> "$GITHUB_OUTPUT"
+        run: echo "sha=$(git rev-parse HEAD:grimoire/third_party/whisper.cpp)" >> "$GITHUB_OUTPUT"
 
       # Same key as the CodeQL workflow, so the two share one whisper.cpp
       # build and only a submodule bump pays for a recompile.
@@ -51,12 +51,12 @@ jobs:
         uses: actions/cache@v6
         with:
           path: grimoire/third_party/whisper.cpp/build
-          key: whisper-${{ runner.os }}-${{ steps.whisper.outputs.sha }}
+          key: whisper-portable-${{ runner.os }}-${{ steps.whisper.outputs.sha }}
 
       # Built up front because `make vet`, unlike `make test`, does not depend
       # on the whisper.cpp libs and would run against a cold cache without them.
       - name: whisper.cpp
-        run: make whisper-build
+        run: make whisper-build WHISPER_CMAKE_FLAGS=-DGGML_NATIVE=OFF
 
       - name: vet
         run: make vet
