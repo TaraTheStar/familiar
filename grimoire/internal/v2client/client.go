@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -121,6 +122,19 @@ func Run(ctx context.Context, cfg Config) (*TurnResult, error) {
 	case <-c.turnComplete:
 	case <-ctx.Done():
 	}
+	// The server sends its listening reset before it decides the turn was a
+	// farewell, so a goodbye frame and its close trail the end-of-turn marker.
+	// Closing the instant the marker lands races them: whichever side's close
+	// arrives first wins, and a goodbye the reader never saw is a goodbye the
+	// result never records. Give the server a moment to close first; a turn
+	// that is not a farewell merely waits out the grace.
+	if ctx.Err() == nil {
+		select {
+		case <-c.readerExited:
+		case <-time.After(closeGrace):
+		case <-ctx.Done():
+		}
+	}
 	_ = c.conn.Close(websocket.StatusNormalClosure, "")
 	<-c.readerExited
 
@@ -137,6 +151,11 @@ func Run(ctx context.Context, cfg Config) (*TurnResult, error) {
 	}
 	return &res, ctx.Err()
 }
+
+// closeGrace is how long Run lets the server close the connection after the
+// turn resolves before closing it itself. It bounds the wait on an ordinary
+// turn, where the server keeps the socket open for the next one.
+const closeGrace = 250 * time.Millisecond
 
 type client struct {
 	cfg  Config
